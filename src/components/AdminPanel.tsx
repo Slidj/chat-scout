@@ -233,7 +233,7 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         )}
         
         <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Назва (напр. GPT-4o)" value={name} onChange={e=>setName(e.target.value)} />
-        <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Ціна (Коротка) (напр. $5/$30)" value={shortPrice} onChange={e=>setShortPrice(e.target.value)} />
+        <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Коротка ціна (напр. $5-$30)" value={shortPrice} onChange={e=>setShortPrice(e.target.value)} />
         <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Повна Ціна (напр. $5-вхід/$30-вихід : 1м токенів)" value={price} onChange={e=>setPrice(e.target.value)} />
         <textarea className="w-full mb-4 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Опис" value={desc} onChange={e=>setDesc(e.target.value)} />
         <div className="flex gap-2 justify-end">

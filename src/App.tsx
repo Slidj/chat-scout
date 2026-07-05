@@ -271,7 +271,13 @@ export default function App() {
                   </div>
                   <div className="bg-emerald-50 dark:bg-emerald-900/20 border-l border-emerald-100 dark:border-emerald-800/50 px-5 flex items-center justify-center shrink-0">
                     <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
-                      {model.shortPriceInfo ? model.shortPriceInfo.replace(/\//g, '-') : model.priceInfo}
+                      {model.shortPriceInfo ? model.shortPriceInfo.replace(/\//g, '-') : (() => {
+                        const matches = model.priceInfo?.match(/\$\d+(\.\d+)?/g);
+                        if (matches && matches.length >= 2) {
+                          return `${matches[0]}-${matches[1]}`;
+                        }
+                        return model.priceInfo;
+                      })()}
                     </span>
                   </div>
                 </div>
