@@ -2,20 +2,36 @@
 
 @theme {
   --animate-shimmer: shimmer 3s infinite linear;
-  --animate-dust: dust 4s infinite alternate ease-in-out;
+  --animate-stars: stars 10s infinite linear;
 
   @keyframes shimmer {
     0% { background-position: -200% center; }
     100% { background-position: 200% center; }
   }
 
-  @keyframes dust {
-    0% { background-position: 0% 0%; }
-    100% { background-position: 100% 100%; }
+  @keyframes stars {
+    0% { transform: translateY(0) translateX(0); }
+    100% { transform: translateY(-100px) translateX(-50px); }
   }
 }
 
-.bg-dust {
-  background-image: radial-gradient(circle at center, rgba(255,255,255,0.1) 1px, transparent 1px);
-  background-size: 8px 8px;
+.stars-container {
+  position: absolute;
+  top: -50px;
+  left: -50px;
+  right: -50px;
+  bottom: -50px;
+  background-image: 
+    radial-gradient(2px 2px at 40px 60px, rgba(255,255,255,0.8), transparent),
+    radial-gradient(2.5px 2.5px at 120px 50px, rgba(255,255,255,0.6), transparent),
+    radial-gradient(1.5px 1.5px at 30px 100px, rgba(255,255,255,0.9), transparent),
+    radial-gradient(2px 2px at 150px 120px, rgba(255,255,255,0.7), transparent),
+    radial-gradient(3px 3px at 90px 90px, rgba(255,255,255,0.5), transparent),
+    radial-gradient(1.5px 1.5px at 190px 150px, rgba(255,255,255,0.8), transparent);
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  animation: stars 10s linear infinite;
+  opacity: 0.4;
+  pointer-events: none;
 }
+

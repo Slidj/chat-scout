@@ -10,13 +10,13 @@ import { getProviders, getModels } from './lib/db';
 const getTierClasses = (tier?: string) => {
   switch (tier) {
     case 'legendary':
-      return 'bg-gradient-to-r from-amber-500/20 to-amber-500/5 border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)] text-amber-50';
+      return 'bg-gradient-to-r from-amber-200 dark:from-amber-900/60 to-white dark:to-[#1C2128] border-amber-300 dark:border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.2)]';
     case 'epic':
-      return 'bg-gradient-to-r from-red-500/20 to-red-500/5 border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.15)] text-red-50';
+      return 'bg-gradient-to-r from-red-200 dark:from-red-900/60 to-white dark:to-[#1C2128] border-red-300 dark:border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]';
     case 'rare':
-      return 'bg-gradient-to-r from-purple-500/20 to-purple-500/5 border-purple-500/40 shadow-[0_0_15px_rgba(168,85,247,0.15)] text-purple-50';
+      return 'bg-gradient-to-r from-purple-200 dark:from-purple-900/60 to-white dark:to-[#1C2128] border-purple-300 dark:border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.2)]';
     case 'uncommon':
-      return 'bg-gradient-to-r from-blue-500/20 to-blue-500/5 border-blue-500/40 shadow-[0_0_15px_rgba(59,130,246,0.15)] text-blue-50';
+      return 'bg-gradient-to-r from-blue-200 dark:from-blue-900/60 to-white dark:to-[#1C2128] border-blue-300 dark:border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.2)]';
     case 'common':
     default:
       return 'bg-white dark:bg-[#1C2128] border-gray-200 dark:border-gray-800 shadow-sm hover:border-gray-300 dark:hover:border-gray-600';
@@ -25,10 +25,10 @@ const getTierClasses = (tier?: string) => {
 
 const getTierTextColor = (tier?: string) => {
   switch (tier) {
-    case 'legendary': return 'text-amber-100';
-    case 'epic': return 'text-red-100';
-    case 'rare': return 'text-purple-100';
-    case 'uncommon': return 'text-blue-100';
+    case 'legendary': return 'text-amber-900 dark:text-amber-100';
+    case 'epic': return 'text-red-900 dark:text-red-100';
+    case 'rare': return 'text-purple-900 dark:text-purple-100';
+    case 'uncommon': return 'text-blue-900 dark:text-blue-100';
     case 'common':
     default: return 'text-gray-900 dark:text-white';
   }
@@ -36,10 +36,10 @@ const getTierTextColor = (tier?: string) => {
 
 const getTierSubtextColor = (tier?: string) => {
   switch (tier) {
-    case 'legendary': return 'text-amber-200/70';
-    case 'epic': return 'text-red-200/70';
-    case 'rare': return 'text-purple-200/70';
-    case 'uncommon': return 'text-blue-200/70';
+    case 'legendary': return 'text-amber-700 dark:text-amber-200/70';
+    case 'epic': return 'text-red-700 dark:text-red-200/70';
+    case 'rare': return 'text-purple-700 dark:text-purple-200/70';
+    case 'uncommon': return 'text-blue-700 dark:text-blue-200/70';
     case 'common':
     default: return 'text-gray-500 dark:text-gray-400';
   }
@@ -301,10 +301,10 @@ export default function App() {
                 <div 
                   key={model.id}
                   onClick={() => openModelDetails(model)}
-                  className={`rounded-2xl cursor-pointer transition-colors flex overflow-hidden relative ${getTierClasses(model.tier)} ${model.tier !== 'common' && model.tier !== undefined ? 'bg-dust animate-dust' : ''}`}
+                  className={`rounded-2xl cursor-pointer transition-colors flex overflow-hidden relative ${getTierClasses(model.tier)}`}
                 >
                   {model.tier && model.tier !== 'common' && (
-                    <div className="absolute inset-0 bg-dust animate-dust opacity-30 pointer-events-none mix-blend-overlay"></div>
+                    <div className="stars-container"></div>
                   )}
                   <div className="p-4 flex-1 relative z-10">
                     <h3 className={`font-semibold text-base ${getTierTextColor(model.tier)}`}>{model.name}</h3>
