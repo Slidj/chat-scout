@@ -1,0 +1,6 @@
+{
+  "name": "TG Mini Chat",
+  "description": "Telegram Mini App for chatting with Gemini AI using a custom API key.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

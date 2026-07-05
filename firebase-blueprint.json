@@ -1,0 +1,23 @@
+{
+  "name": "TG Mini Chat",
+  "models": {
+    "Provider": {
+      "collection": "providers",
+      "fields": {
+        "name": { "type": "string", "required": true },
+        "description": { "type": "string", "required": true },
+        "color": { "type": "string", "required": true }
+      }
+    },
+    "AiModel": {
+      "collection": "models",
+      "fields": {
+        "providerId": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "description": { "type": "string", "required": true },
+        "priceInfo": { "type": "string", "required": true },
+        "apiModelId": { "type": "string", "required": true }
+      }
+    }
+  }
+}
