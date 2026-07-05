@@ -263,14 +263,16 @@ export default function App() {
                 <div 
                   key={model.id}
                   onClick={() => openModelDetails(model)}
-                  className="bg-white dark:bg-[#1C2128] p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer transition-colors flex justify-between items-center"
+                  className="bg-white dark:bg-[#1C2128] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer transition-colors flex overflow-hidden"
                 >
-                  <div>
+                  <div className="p-4 flex-1">
                     <h3 className="font-semibold text-gray-900 dark:text-white text-base">{model.name}</h3>
                     <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">{providers.find(p => p.id === model.providerId)?.name}</p>
                   </div>
-                  <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-400/10 border border-emerald-200 dark:border-emerald-400/20 px-3 py-1.5 rounded-lg shrink-0 ml-4 whitespace-nowrap">
-                    {model.shortPriceInfo || model.priceInfo}
+                  <div className="bg-emerald-50 dark:bg-emerald-900/20 border-l border-emerald-100 dark:border-emerald-800/50 px-5 flex items-center justify-center shrink-0">
+                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+                      {model.shortPriceInfo ? model.shortPriceInfo.replace(/\//g, '-') : model.priceInfo}
+                    </span>
                   </div>
                 </div>
               ))}
