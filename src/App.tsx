@@ -263,14 +263,14 @@ export default function App() {
                 <div 
                   key={model.id}
                   onClick={() => openModelDetails(model)}
-                  className="bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm hover:border-blue-500 dark:hover:border-blue-500 cursor-pointer transition-colors flex justify-between items-center"
+                  className="bg-white dark:bg-[#1C2128] p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer transition-colors flex justify-between items-center"
                 >
                   <div>
                     <h3 className="font-semibold text-gray-900 dark:text-white text-base">{model.name}</h3>
-                    <p className="text-sm text-gray-500 mt-0.5 line-clamp-1">{model.description}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">{providers.find(p => p.id === model.providerId)?.name}</p>
                   </div>
-                  <div className="text-xs font-medium text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md shrink-0 ml-4">
-                    {model.priceInfo}
+                  <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-400/10 border border-emerald-200 dark:border-emerald-400/20 px-3 py-1.5 rounded-lg shrink-0 ml-4 whitespace-nowrap">
+                    {model.shortPriceInfo || model.priceInfo}
                   </div>
                 </div>
               ))}

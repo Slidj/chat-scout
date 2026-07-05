@@ -12,5 +12,6 @@ export interface AiModel {
   name: string;
   description: string;
   priceInfo: string;
+  shortPriceInfo?: string;
   apiModelId: string; // The actual ID to send to the Scout AI API
 }

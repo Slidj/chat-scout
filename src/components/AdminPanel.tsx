@@ -121,7 +121,7 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
               <div key={m.id} className="bg-white dark:bg-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-800 flex justify-between items-center">
                 <div>
                   <h4 className="font-bold text-gray-900 dark:text-white">{m.name} <span className="text-xs font-normal text-gray-500 ml-2">({providers.find(p=>p.id === m.providerId)?.name})</span></h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{m.apiModelId} • {m.priceInfo}</p>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{m.apiModelId} • {m.shortPriceInfo ? `${m.shortPriceInfo} / ` : ''}{m.priceInfo}</p>
                 </div>
                 <div className="flex gap-3">
                   <button onClick={() => setEditingModel(m)} className="text-gray-500 hover:text-blue-600"><Edit2 size={18}/></button>
@@ -201,6 +201,7 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
   const [desc, setDesc] = useState(model?.description || '');
   const [apiId, setApiId] = useState(model?.apiModelId || (apiModels && apiModels.length > 0 ? apiModels[0].id : ''));
   const [price, setPrice] = useState(model?.priceInfo || '');
+  const [shortPrice, setShortPrice] = useState(model?.shortPriceInfo || '');
   const [providerId, setProviderId] = useState(model?.providerId || (providers[0]?.id || ''));
 
   return (
@@ -232,11 +233,12 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         )}
         
         <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Назва (напр. GPT-4o)" value={name} onChange={e=>setName(e.target.value)} />
-        <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Ціна (напр. $5 / 1M)" value={price} onChange={e=>setPrice(e.target.value)} />
+        <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Ціна (Коротка) (напр. $5/$30)" value={shortPrice} onChange={e=>setShortPrice(e.target.value)} />
+        <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Повна Ціна (напр. $5-вхід/$30-вихід : 1м токенів)" value={price} onChange={e=>setPrice(e.target.value)} />
         <textarea className="w-full mb-4 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Опис" value={desc} onChange={e=>setDesc(e.target.value)} />
         <div className="flex gap-2 justify-end">
-          <button onClick={onClose} className="px-4 py-2 text-gray-600">Скасувати</button>
-          <button onClick={() => onSave({ name, description: desc, apiModelId: apiId, priceInfo: price, providerId })} className="px-4 py-2 bg-blue-600 text-white rounded">Зберегти</button>
+          <button onClick={onClose} className="px-4 py-2 text-gray-600 dark:text-gray-400">Скасувати</button>
+          <button onClick={() => onSave({ name, description: desc, apiModelId: apiId, priceInfo: price, shortPriceInfo: shortPrice, providerId })} className="px-4 py-2 bg-blue-600 text-white rounded">Зберегти</button>
         </div>
       </div>
     </div>
