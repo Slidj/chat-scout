@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, X, AlertCircle } from 'lucide-react';
+import { Send, Sparkles, X, AlertCircle, ChevronDown } from 'lucide-react';
 import { Message, generateChatResponse, Model } from '../lib/api';
 import { ChatMessage } from './ChatMessage';
+import { getTierClasses, getTierTextColor, getTierSubtextColor } from '../lib/utils';
 
 interface ChatPanelProps {
   apiKey: string;
@@ -16,7 +17,19 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -88,16 +101,58 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
           <div className="flex-1 min-w-0 pr-2">
             <h2 className="font-semibold text-sm leading-tight">Чат</h2>
             {apiModels.length > 0 ? (
-              <select 
-                value={selectedModel || ''}
-                onChange={(e) => onChangeModel(e.target.value)}
-                className="w-full bg-transparent border-none text-xs text-gray-500 focus:ring-0 p-0 m-0 dark:bg-gray-900 outline-none cursor-pointer"
-              >
-                <option value="" disabled>Оберіть модель</option>
-                {apiModels.map(m => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
+              <div className="relative" ref={dropdownRef}>
+                <div 
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  className={`flex items-center justify-between w-full cursor-pointer rounded-md overflow-hidden relative transition-colors border ${
+                    selectedModel 
+                      ? getTierClasses(apiModels.find(m => m.id === selectedModel)?.tier).replace('shadow-[0_0_15px_rgba(245,158,11,0.2)]', '').replace('shadow-[0_0_15px_rgba(239,68,68,0.2)]', '').replace('shadow-[0_0_15px_rgba(168,85,247,0.2)]', '').replace('shadow-[0_0_15px_rgba(59,130,246,0.2)]', '').replace('border-gray-200', 'border-transparent').replace('dark:border-gray-800', 'border-transparent').replace('shadow-sm', '')
+                      : 'bg-transparent border-transparent'
+                  }`}
+                  style={{ padding: selectedModel ? '2px 6px' : '0' }}
+                >
+                  {selectedModel && apiModels.find(m => m.id === selectedModel)?.tier && apiModels.find(m => m.id === selectedModel)?.tier !== 'common' && (
+                    <div className="stars-container opacity-50"></div>
+                  )}
+                  <span className={`text-xs truncate relative z-10 ${selectedModel ? getTierTextColor(apiModels.find(m => m.id === selectedModel)?.tier) : 'text-gray-500'}`}>
+                    {selectedModel ? apiModels.find(m => m.id === selectedModel)?.name : 'Оберіть модель'}
+                  </span>
+                  <ChevronDown size={12} className={`relative z-10 ml-1 shrink-0 ${selectedModel ? getTierTextColor(apiModels.find(m => m.id === selectedModel)?.tier) : 'text-gray-500'}`} />
+                </div>
+                
+                {isDropdownOpen && (
+                  <div className="absolute top-full left-0 mt-1 w-64 max-h-64 overflow-y-auto bg-white dark:bg-[#1C2128] border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl z-50 flex flex-col p-1 gap-1">
+                    {apiModels.map(m => (
+                      <div
+                        key={m.id}
+                        onClick={() => {
+                          onChangeModel(m.id);
+                          setIsDropdownOpen(false);
+                        }}
+                        className={`flex justify-between items-center px-3 py-2 rounded-lg cursor-pointer text-sm overflow-hidden relative transition-all ${getTierClasses(m.tier)}`}
+                      >
+                        {m.tier && m.tier !== 'common' && (
+                          <div className="stars-container"></div>
+                        )}
+                        <div className="flex flex-col relative z-10 min-w-0 pr-2">
+                          <span className={`font-medium truncate ${getTierTextColor(m.tier)}`}>{m.name}</span>
+                        </div>
+                        <div className="bg-emerald-50 dark:bg-emerald-900/40 border-l border-emerald-100 dark:border-emerald-800/50 pl-2 pr-1 py-0.5 rounded flex items-center justify-center shrink-0 relative z-10 ml-auto">
+                          <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap drop-shadow-sm">
+                            {m.shortPriceInfo ? m.shortPriceInfo.replace(/\//g, '-') : (() => {
+                              const matches = m.priceInfo?.match(/\$\d+(\.\d+)?/g);
+                              if (matches && matches.length >= 2) {
+                                return `${matches[0]}-${matches[1]}`;
+                              }
+                              return m.priceInfo;
+                            })()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             ) : (
               <p className="text-xs text-gray-500 truncate">{selectedModel || 'Оберіть модель'}</p>
             )}
