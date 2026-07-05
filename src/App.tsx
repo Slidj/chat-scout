@@ -7,6 +7,44 @@ import { Provider, AiModel } from './types';
 import { fetchModels, Model } from './lib/api';
 import { getProviders, getModels } from './lib/db';
 
+const getTierClasses = (tier?: string) => {
+  switch (tier) {
+    case 'legendary':
+      return 'bg-gradient-to-r from-amber-500/20 to-amber-500/5 border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)] text-amber-50';
+    case 'epic':
+      return 'bg-gradient-to-r from-red-500/20 to-red-500/5 border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.15)] text-red-50';
+    case 'rare':
+      return 'bg-gradient-to-r from-purple-500/20 to-purple-500/5 border-purple-500/40 shadow-[0_0_15px_rgba(168,85,247,0.15)] text-purple-50';
+    case 'uncommon':
+      return 'bg-gradient-to-r from-blue-500/20 to-blue-500/5 border-blue-500/40 shadow-[0_0_15px_rgba(59,130,246,0.15)] text-blue-50';
+    case 'common':
+    default:
+      return 'bg-white dark:bg-[#1C2128] border-gray-200 dark:border-gray-800 shadow-sm hover:border-gray-300 dark:hover:border-gray-600';
+  }
+};
+
+const getTierTextColor = (tier?: string) => {
+  switch (tier) {
+    case 'legendary': return 'text-amber-100';
+    case 'epic': return 'text-red-100';
+    case 'rare': return 'text-purple-100';
+    case 'uncommon': return 'text-blue-100';
+    case 'common':
+    default: return 'text-gray-900 dark:text-white';
+  }
+};
+
+const getTierSubtextColor = (tier?: string) => {
+  switch (tier) {
+    case 'legendary': return 'text-amber-200/70';
+    case 'epic': return 'text-red-200/70';
+    case 'rare': return 'text-purple-200/70';
+    case 'uncommon': return 'text-blue-200/70';
+    case 'common':
+    default: return 'text-gray-500 dark:text-gray-400';
+  }
+};
+
 declare global {
   interface Window {
     Telegram?: {
@@ -263,14 +301,17 @@ export default function App() {
                 <div 
                   key={model.id}
                   onClick={() => openModelDetails(model)}
-                  className="bg-white dark:bg-[#1C2128] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm hover:border-gray-300 dark:hover:border-gray-600 cursor-pointer transition-colors flex overflow-hidden"
+                  className={`rounded-2xl cursor-pointer transition-colors flex overflow-hidden relative ${getTierClasses(model.tier)} ${model.tier !== 'common' && model.tier !== undefined ? 'bg-dust animate-dust' : ''}`}
                 >
-                  <div className="p-4 flex-1">
-                    <h3 className="font-semibold text-gray-900 dark:text-white text-base">{model.name}</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">{providers.find(p => p.id === model.providerId)?.name}</p>
+                  {model.tier && model.tier !== 'common' && (
+                    <div className="absolute inset-0 bg-dust animate-dust opacity-30 pointer-events-none mix-blend-overlay"></div>
+                  )}
+                  <div className="p-4 flex-1 relative z-10">
+                    <h3 className={`font-semibold text-base ${getTierTextColor(model.tier)}`}>{model.name}</h3>
+                    <p className={`text-sm mt-0.5 line-clamp-1 ${getTierSubtextColor(model.tier)}`}>{providers.find(p => p.id === model.providerId)?.name}</p>
                   </div>
-                  <div className="bg-emerald-50 dark:bg-emerald-900/20 border-l border-emerald-100 dark:border-emerald-800/50 px-5 flex items-center justify-center shrink-0">
-                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap">
+                  <div className="bg-emerald-50 dark:bg-emerald-900/40 border-l border-emerald-100 dark:border-emerald-800/50 px-5 flex items-center justify-center shrink-0 relative z-10">
+                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400 whitespace-nowrap drop-shadow-sm">
                       {model.shortPriceInfo ? model.shortPriceInfo.replace(/\//g, '-') : (() => {
                         const matches = model.priceInfo?.match(/\$\d+(\.\d+)?/g);
                         if (matches && matches.length >= 2) {

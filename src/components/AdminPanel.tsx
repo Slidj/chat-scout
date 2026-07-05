@@ -203,6 +203,7 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
   const [price, setPrice] = useState(model?.priceInfo || '');
   const [shortPrice, setShortPrice] = useState(model?.shortPriceInfo || '');
   const [providerId, setProviderId] = useState(model?.providerId || (providers[0]?.id || ''));
+  const [tier, setTier] = useState(model?.tier || 'common');
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
@@ -235,10 +236,19 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Назва (напр. GPT-4o)" value={name} onChange={e=>setName(e.target.value)} />
         <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Коротка ціна (напр. $5-$30)" value={shortPrice} onChange={e=>setShortPrice(e.target.value)} />
         <input className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Повна Ціна (напр. $5-вхід/$30-вихід : 1м токенів)" value={price} onChange={e=>setPrice(e.target.value)} />
+        
+        <select className="w-full mb-3 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded" value={tier} onChange={e=>setTier(e.target.value)}>
+          <option value="common">Звичайний (Common - Сірий)</option>
+          <option value="uncommon">Незвичайний (Uncommon - Синій)</option>
+          <option value="rare">Рідкісний (Rare - Пурпурний)</option>
+          <option value="epic">Епічний (Epic - Червоний)</option>
+          <option value="legendary">Легендарний (Legendary - Золотий)</option>
+        </select>
+
         <textarea className="w-full mb-4 p-2 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 rounded" placeholder="Опис" value={desc} onChange={e=>setDesc(e.target.value)} />
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 text-gray-600 dark:text-gray-400">Скасувати</button>
-          <button onClick={() => onSave({ name, description: desc, apiModelId: apiId, priceInfo: price, shortPriceInfo: shortPrice, providerId })} className="px-4 py-2 bg-blue-600 text-white rounded">Зберегти</button>
+          <button onClick={() => onSave({ name, description: desc, apiModelId: apiId, priceInfo: price, shortPriceInfo: shortPrice, providerId, tier })} className="px-4 py-2 bg-blue-600 text-white rounded">Зберегти</button>
         </div>
       </div>
     </div>

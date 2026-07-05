@@ -14,4 +14,5 @@ export interface AiModel {
   priceInfo: string;
   shortPriceInfo?: string;
   apiModelId: string; // The actual ID to send to the Scout AI API
+  tier?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 }
