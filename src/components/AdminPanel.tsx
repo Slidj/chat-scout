@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { getProviders, getModels, saveProvider, updateProvider, deleteProvider, saveModel, updateModel, deleteModel } from '../lib/db';
 import { fetchModels } from '../lib/api';
 import { Provider, AiModel } from '../types';
-import { Plus, Edit2, Trash2, X, Upload, Check, Palette } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Upload, Check, Palette, Shield } from 'lucide-react';
 import { resolveColorToHex, COLOR_PRESETS, ColorPreset, resizeImageFile } from '../lib/utils';
 
 export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, apiModels?: {id: string, name: string}[] }) {
@@ -55,33 +55,36 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-gray-50 dark:bg-gray-950 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex flex-col bg-[#171614] text-[#ECE8E1] overflow-hidden">
       <header 
-        className="flex items-center justify-between px-6 pb-4 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800"
+        className="flex items-center justify-between px-6 pb-4 bg-[#1B1A17] border-b border-[#2E2C28]"
         style={{ paddingTop: 'calc(1rem + var(--safe-top, 0px))' }}
       >
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Панель Адміністратора</h2>
+        <div className="flex items-center gap-2">
+          <Shield size={20} className="text-[#CC785C]" />
+          <h2 className="text-xl font-bold tracking-tight text-[#ECE8E1]">Панель Адміністратора</h2>
+        </div>
         <div className="flex gap-4 items-center">
-          <span className="text-sm text-gray-600 dark:text-gray-400 font-medium">Admin</span>
-          <button onClick={onClose} className="p-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full transition-colors"><X size={20}/></button>
+          <span className="text-xs bg-[#2B2A27] text-[#CC785C] font-semibold px-2.5 py-1 rounded-full border border-[#3E3C37]">Admin</span>
+          <button onClick={onClose} className="p-2 bg-[#2B2A27] hover:bg-[#383632] text-[#ECE8E1] rounded-full transition-colors"><X size={20}/></button>
         </div>
       </header>
 
       <main className="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full space-y-8">
         
         {/* Admin API Key Section */}
-        <section className="bg-white dark:bg-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-800">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Master API Key (для завантаження списку всіх моделей)</h3>
-          <p className="text-sm text-gray-500 mb-3">Введіть API ключ, який має доступ до всіх можливих моделей, щоб ви могли додавати їх у базу.</p>
+        <section className="bg-[#242320] p-5 rounded-2xl border border-[#363430]">
+          <h3 className="text-base font-semibold text-[#ECE8E1] mb-1">Master API Key (для завантаження списку всіх моделей)</h3>
+          <p className="text-xs text-[#9E9A92] mb-3">Введіть API ключ, який має доступ до всіх можливих моделей, щоб ви могли додавати їх у базу.</p>
           <div className="flex gap-2">
             <input 
               type="password"
-              className="flex-1 p-2 border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white rounded-lg focus:outline-none focus:border-blue-500" 
+              className="flex-1 px-3.5 py-2.5 border border-[#3A3834] bg-[#1B1A17] text-[#ECE8E1] rounded-xl focus:outline-none focus:border-[#CC785C] text-sm" 
               placeholder="sk-..." 
               value={adminApiKey} 
               onChange={e => setAdminApiKey(e.target.value)} 
             />
-            <button onClick={handleLoadAdminModels} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors">
+            <button onClick={handleLoadAdminModels} className="bg-[#CC785C] hover:bg-[#D97757] text-white px-4 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm">
               Завантажити моделі
             </button>
           </div>
@@ -91,12 +94,12 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
         <section>
           <div className="flex justify-between items-center mb-4">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Постачальники</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Налаштуйте логотипи, фірмові кольори та опис постачальників ШІ</p>
+              <h3 className="text-lg font-semibold text-[#ECE8E1]">Постачальники</h3>
+              <p className="text-xs text-[#9E9A92]">Налаштуйте логотипи, фірмові кольори та опис постачальників ШІ</p>
             </div>
             <button 
               onClick={() => setIsAddingProvider(true)} 
-              className="flex items-center gap-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white font-medium px-3.5 py-2 rounded-xl transition-colors shadow-sm"
+              className="flex items-center gap-1.5 text-xs bg-[#FAF8F5] hover:bg-white text-black font-semibold px-3.5 py-2 rounded-full transition-colors shadow-sm"
             >
               <Plus size={16}/> Додати постачальника
             </button>
@@ -105,7 +108,7 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
             {providers.map(p => {
               const hexColor = resolveColorToHex(p.color);
               return (
-                <div key={p.id} className="bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-200 dark:border-gray-800 flex flex-col justify-between shadow-sm hover:shadow-md transition-shadow">
+                <div key={p.id} className="bg-[#242320] p-4 rounded-2xl border border-[#363430] hover:border-[#4B4842] flex flex-col justify-between shadow-sm transition-all">
                   <div>
                     <div className="flex justify-between items-start mb-3">
                       <div className="flex items-center gap-3 min-w-0">
@@ -120,20 +123,20 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
                           )}
                         </div>
                         <div className="min-w-0">
-                          <h4 className="font-bold text-gray-900 dark:text-white truncate">{p.name}</h4>
+                          <h4 className="font-bold text-[#ECE8E1] truncate">{p.name}</h4>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span 
-                              className="inline-block w-3 h-3 rounded-full border border-black/10 shrink-0" 
+                              className="inline-block w-2.5 h-2.5 rounded-full border border-black/10 shrink-0" 
                               style={{ backgroundColor: hexColor }}
                             />
-                            <span className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate max-w-[120px]">{p.color}</span>
+                            <span className="text-xs font-mono text-[#9E9A92] truncate max-w-[120px]">{p.color}</span>
                           </div>
                         </div>
                       </div>
                       <div className="flex gap-1 shrink-0 ml-2">
                         <button 
                           onClick={() => setEditingProvider(p)} 
-                          className="p-1.5 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"
+                          className="p-1.5 rounded-lg text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#2F2E2B] transition-colors"
                           title="Редагувати"
                         >
                           <Edit2 size={16}/>
@@ -145,18 +148,18 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
                               loadData(); 
                             } 
                           }} 
-                          className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+                          className="p-1.5 rounded-lg text-[#9E9A92] hover:text-red-400 hover:bg-red-950/20 transition-colors"
                           title="Видалити"
                         >
                           <Trash2 size={16}/>
                         </button>
                       </div>
                     </div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">{p.description}</p>
+                    <p className="text-xs text-[#9E9A92] line-clamp-2">{p.description}</p>
                   </div>
                   <div 
                     style={{ backgroundColor: hexColor }}
-                    className="mt-4 w-full h-1.5 rounded-full"
+                    className="mt-4 w-full h-1.5 rounded-full opacity-80"
                   />
                 </div>
               );
@@ -168,26 +171,26 @@ export function AdminPanel({ onClose, apiModels = [] }: { onClose: () => void, a
         <section>
           <div className="flex justify-between items-center mb-4">
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Моделі</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Керуйте моделями, тарифами та рівнями рідкісності (RPG tiers)</p>
+              <h3 className="text-lg font-semibold text-[#ECE8E1]">Моделі</h3>
+              <p className="text-xs text-[#9E9A92]">Керуйте моделями, тарифами та рівнями рідкісності (RPG tiers)</p>
             </div>
             <button 
               onClick={() => setIsAddingModel(true)} 
-              className="flex items-center gap-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white font-medium px-3.5 py-2 rounded-xl transition-colors shadow-sm"
+              className="flex items-center gap-1.5 text-xs bg-[#FAF8F5] hover:bg-white text-black font-semibold px-3.5 py-2 rounded-full transition-colors shadow-sm"
             >
               <Plus size={16}/> Додати модель
             </button>
           </div>
           <div className="space-y-3">
             {models.map(m => (
-              <div key={m.id} className="bg-white dark:bg-gray-900 p-4 rounded-xl border border-gray-200 dark:border-gray-800 flex justify-between items-center shadow-sm">
+              <div key={m.id} className="bg-[#242320] p-4 rounded-xl border border-[#363430] flex justify-between items-center shadow-xs">
                 <div>
-                  <h4 className="font-bold text-gray-900 dark:text-white">{m.name} <span className="text-xs font-normal text-gray-500 ml-2">({providers.find(p=>p.id === m.providerId)?.name})</span></h4>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">{m.apiModelId} • {m.shortPriceInfo ? `${m.shortPriceInfo} / ` : ''}{m.priceInfo}</p>
+                  <h4 className="font-bold text-[#ECE8E1]">{m.name} <span className="text-xs font-normal text-[#9E9A92] ml-2">({providers.find(p=>p.id === m.providerId)?.name})</span></h4>
+                  <p className="text-xs text-[#9E9A92] mt-0.5">{m.apiModelId} • {m.shortPriceInfo ? `${m.shortPriceInfo} / ` : ''}{m.priceInfo}</p>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setEditingModel(m)} className="p-1.5 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors"><Edit2 size={18}/></button>
-                  <button onClick={async () => { if (confirm(`Видалити модель "${m.name}"?`)) { await deleteModel(m.id); loadData(); } }} className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"><Trash2 size={18}/></button>
+                <div className="flex gap-1.5">
+                  <button onClick={() => setEditingModel(m)} className="p-2 rounded-lg text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#2F2E2B] transition-colors"><Edit2 size={16}/></button>
+                  <button onClick={async () => { if (confirm(`Видалити модель "${m.name}"?`)) { await deleteModel(m.id); loadData(); } }} className="p-2 rounded-lg text-[#9E9A92] hover:text-red-400 hover:bg-red-950/20 transition-colors"><Trash2 size={16}/></button>
                 </div>
               </div>
             ))}
@@ -274,22 +277,22 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
   const neutralPresets = COLOR_PRESETS.filter(p => p.category === 'neutral');
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-gray-900 p-6 rounded-3xl w-full max-w-lg shadow-2xl border border-gray-200 dark:border-gray-800 max-h-[92vh] overflow-y-auto my-auto space-y-5">
-        <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-800 pb-3">
-          <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 overflow-y-auto">
+      <div className="bg-[#242320] text-[#ECE8E1] p-6 rounded-3xl w-full max-w-lg shadow-2xl border border-[#383632] max-h-[92vh] overflow-y-auto my-auto space-y-5">
+        <div className="flex justify-between items-center border-b border-[#33312D] pb-3">
+          <h3 className="text-lg font-bold text-[#ECE8E1]">
             {provider ? 'Редагувати постачальника' : 'Додати нового постачальника'}
           </h3>
           <button 
             onClick={onClose} 
-            className="p-1 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            className="p-1 rounded-full text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#302E2A] transition-colors"
           >
             <X size={20}/>
           </button>
         </div>
 
         {/* Live Preview Card */}
-        <div className="bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700/60 rounded-2xl p-4 flex items-center gap-4">
+        <div className="bg-[#1C1B18] border border-[#363430] rounded-2xl p-4 flex items-center gap-4">
           <div 
             style={{ backgroundColor: resolvedHex }}
             className="w-16 h-16 rounded-2xl text-white flex items-center justify-center font-bold text-2xl shadow-md shrink-0 overflow-hidden relative transition-all"
@@ -301,20 +304,20 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-0.5">Попередній перегляд</div>
-            <h4 className="font-bold text-gray-900 dark:text-white text-base truncate">{name || 'Назва постачальника'}</h4>
-            <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-1">{desc || 'Опис постачальника буде відображатись тут...'}</p>
+            <div className="text-[11px] font-semibold text-[#8A8780] uppercase tracking-wider mb-0.5">Попередній перегляд</div>
+            <h4 className="font-bold text-[#ECE8E1] text-base truncate">{name || 'Назва постачальника'}</h4>
+            <p className="text-xs text-[#9E9A92] line-clamp-1">{desc || 'Опис постачальника буде відображатись тут...'}</p>
           </div>
         </div>
 
         {/* Name & Description */}
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
               Назва постачальника *
             </label>
             <input 
-              className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
               placeholder="напр. OpenAI, Anthropic, Google..." 
               value={name} 
               onChange={e=>setName(e.target.value)} 
@@ -322,12 +325,12 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
               Опис
             </label>
             <textarea 
               rows={2}
-              className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" 
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C] resize-none" 
               placeholder="Короткий опис сервісу та його можливостей" 
               value={desc} 
               onChange={e=>setDesc(e.target.value)} 
@@ -336,23 +339,23 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
         </div>
 
         {/* Logo Upload Section */}
-        <div className="border-t border-gray-100 dark:border-gray-800 pt-4">
+        <div className="border-t border-[#33312D] pt-4">
           <div className="flex justify-between items-center mb-2">
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider">
               Логотип постачальника
             </label>
             <div className="flex gap-1 text-xs">
               <button 
                 type="button"
                 onClick={() => setLogoMode('upload')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${logoMode === 'upload' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${logoMode === 'upload' ? 'bg-[#35332F] text-[#ECE8E1]' : 'text-[#8A8780] hover:text-[#ECE8E1]'}`}
               >
                 Файл
               </button>
               <button 
                 type="button"
                 onClick={() => setLogoMode('url')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${logoMode === 'url' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${logoMode === 'url' ? 'bg-[#35332F] text-[#ECE8E1]' : 'text-[#8A8780] hover:text-[#ECE8E1]'}`}
               >
                 URL
               </button>
@@ -371,16 +374,16 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
               />
               <div 
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-gray-300 dark:border-gray-700 hover:border-blue-500 dark:hover:border-blue-400 rounded-2xl p-4 text-center cursor-pointer transition-colors bg-gray-50/50 dark:bg-gray-800/30 flex flex-col items-center justify-center gap-2 group"
+                className="border-2 border-dashed border-[#3E3C37] hover:border-[#CC785C] rounded-2xl p-4 text-center cursor-pointer transition-colors bg-[#1B1A17] flex flex-col items-center justify-center gap-2 group"
               >
-                <div className="p-2.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl group-hover:scale-110 transition-transform">
+                <div className="p-2.5 bg-[#2B2A27] text-[#CC785C] rounded-xl group-hover:scale-105 transition-transform">
                   <Upload size={20} />
                 </div>
                 <div>
-                  <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                  <span className="text-sm font-medium text-[#ECE8E1]">
                     {isProcessingImage ? 'Обробка зображення...' : 'Натисніть для вибору логотипу'}
                   </span>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Підтримуються PNG, SVG, JPG, WebP (автоматичне масштабування)</p>
+                  <p className="text-xs text-[#8A8780] mt-0.5">Підтримуються PNG, SVG, JPG, WebP</p>
                 </div>
               </div>
             </div>
@@ -394,21 +397,21 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
                   setLogoUrl(e.target.value);
                 }}
                 placeholder="https://example.com/logo.png"
-                className="flex-1 p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]"
               />
             </div>
           )}
 
           {logoUrl && (
-            <div className="mt-2.5 flex items-center justify-between px-3 py-2 bg-gray-100 dark:bg-gray-800 rounded-xl text-xs">
-              <span className="text-gray-600 dark:text-gray-300 truncate max-w-[260px] font-medium flex items-center gap-1.5">
-                <Check size={14} className="text-emerald-500 shrink-0" />
+            <div className="mt-2.5 flex items-center justify-between px-3 py-2 bg-[#1B1A17] border border-[#33312D] rounded-xl text-xs">
+              <span className="text-[#ECE8E1] truncate max-w-[260px] font-medium flex items-center gap-1.5">
+                <Check size={14} className="text-emerald-400 shrink-0" />
                 Логотип завантажено
               </span>
               <button 
                 type="button" 
                 onClick={() => { setLogoUrl(''); setDirectUrl(''); }}
-                className="text-red-500 hover:text-red-600 font-medium px-2 py-0.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                className="text-red-400 hover:text-red-300 font-medium px-2 py-0.5 rounded hover:bg-red-950/20 transition-colors"
               >
                 Видалити лого
               </button>
@@ -417,10 +420,10 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
         </div>
 
         {/* Color Presets & Selector Section */}
-        <div className="border-t border-gray-100 dark:border-gray-800 pt-4 space-y-3">
+        <div className="border-t border-[#33312D] pt-4 space-y-3">
           <div className="flex justify-between items-center">
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Palette size={14} className="text-blue-500" />
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider flex items-center gap-1.5">
+              <Palette size={14} className="text-[#CC785C]" />
               Колір постачальника
             </label>
             <div className="flex items-center gap-2">
@@ -428,13 +431,13 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
                 className="w-4 h-4 rounded-full border border-black/20 shadow-xs" 
                 style={{ backgroundColor: resolvedHex }}
               />
-              <span className="text-xs font-mono font-medium text-gray-700 dark:text-gray-300">{resolvedHex}</span>
+              <span className="text-xs font-mono font-medium text-[#ECE8E1]">{resolvedHex}</span>
             </div>
           </div>
 
           {/* AI Brands Presets */}
           <div>
-            <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1.5">Фірмові ШІ:</div>
+            <div className="text-[11px] font-medium text-[#8A8780] mb-1.5">Фірмові ШІ:</div>
             <div className="flex flex-wrap gap-2">
               {brandPresets.map(preset => {
                 const isSelected = resolvedHex.toLowerCase() === preset.hex.toLowerCase();
@@ -445,8 +448,8 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
                     onClick={() => handleColorPreset(preset)}
                     className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-all ${
                       isSelected 
-                        ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 shadow-xs' 
-                        : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+                        ? 'border-[#CC785C] bg-[#332A26] text-[#ECE8E1] shadow-xs' 
+                        : 'border-[#383632] hover:border-[#4B4842] bg-[#1C1B18] text-[#ECE8E1]'
                     }`}
                   >
                     <span 
@@ -464,7 +467,7 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
 
           {/* Vibrant Presets Grid */}
           <div>
-            <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1.5">Яскраві заготовки:</div>
+            <div className="text-[11px] font-medium text-[#8A8780] mb-1.5">Яскраві заготовки:</div>
             <div className="grid grid-cols-8 gap-2">
               {vibrantPresets.map(preset => {
                 const isSelected = resolvedHex.toLowerCase() === preset.hex.toLowerCase();
@@ -475,8 +478,8 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
                     title={preset.name}
                     onClick={() => handleColorPreset(preset)}
                     style={{ backgroundColor: preset.hex }}
-                    className={`h-8 rounded-xl shadow-xs transition-transform hover:scale-110 flex items-center justify-center text-white ${
-                      isSelected ? 'ring-3 ring-offset-2 ring-blue-500 scale-105' : ''
+                    className={`h-8 rounded-xl shadow-xs transition-transform hover:scale-105 flex items-center justify-center text-white ${
+                      isSelected ? 'ring-2 ring-offset-2 ring-offset-[#242320] ring-[#CC785C]' : ''
                     }`}
                   >
                     {isSelected && <Check size={14} className="drop-shadow" />}
@@ -486,40 +489,10 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
             </div>
           </div>
 
-          {/* Neutral Presets */}
-          <div>
-            <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1.5">Нейтральні / Темні:</div>
-            <div className="flex gap-2">
-              {neutralPresets.map(preset => {
-                const isSelected = resolvedHex.toLowerCase() === preset.hex.toLowerCase();
-                return (
-                  <button
-                    key={preset.name}
-                    type="button"
-                    onClick={() => handleColorPreset(preset)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-all ${
-                      isSelected 
-                        ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 shadow-xs' 
-                        : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300'
-                    }`}
-                  >
-                    <span 
-                      className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs flex items-center justify-center text-white" 
-                      style={{ backgroundColor: preset.hex }}
-                    >
-                      {isSelected && <Check size={10} />}
-                    </span>
-                    <span>{preset.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Custom Color Input & Picker */}
           <div className="pt-1">
-            <div className="text-[11px] font-medium text-gray-500 dark:text-gray-400 mb-1.5">
-              Власний колір (HEX код або клас Tailwind):
+            <div className="text-[11px] font-medium text-[#8A8780] mb-1.5">
+              Власний колір (HEX або Tailwind):
             </div>
             <div className="flex items-center gap-2">
               <label 
@@ -529,7 +502,7 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
               >
                 <input 
                   type="color" 
-                  value={resolvedHex.startsWith('#') && resolvedHex.length === 7 ? resolvedHex : '#2563EB'} 
+                  value={resolvedHex.startsWith('#') && resolvedHex.length === 7 ? resolvedHex : '#CC785C'} 
                   onChange={e => setColor(e.target.value)} 
                   className="opacity-0 w-0 h-0 cursor-pointer"
                 />
@@ -538,32 +511,29 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
 
               <input 
                 type="text"
-                className="flex-1 p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono" 
+                className="flex-1 p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C] font-mono" 
                 placeholder="#3B82F6 або bg-blue-500" 
                 value={color} 
                 onChange={e=>setColor(e.target.value)} 
               />
             </div>
-            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
-              Підтримує HEX (<code className="font-mono text-blue-600 dark:text-blue-400">#6366F1</code>), Tailwind класи (<code className="font-mono text-blue-600 dark:text-blue-400">bg-blue-500</code>) та клік на палітру.
-            </p>
           </div>
         </div>
 
         {/* Modal Action Buttons */}
-        <div className="flex gap-2.5 justify-end border-t border-gray-100 dark:border-gray-800 pt-4">
+        <div className="flex gap-2.5 justify-end border-t border-[#33312D] pt-4">
           <button 
             type="button"
             onClick={onClose} 
-            className="px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
+            className="px-4 py-2.5 text-sm font-medium text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#2F2E2B] rounded-xl transition-colors"
           >
             Скасувати
           </button>
           <button 
             type="button"
             disabled={!name.trim()}
-            onClick={() => onSave({ name: name.trim(), description: desc.trim(), color: color.trim() || '#2563EB', logoUrl: logoUrl || '' })} 
-            className="px-5 py-2.5 text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl shadow-md transition-colors"
+            onClick={() => onSave({ name: name.trim(), description: desc.trim(), color: color.trim() || '#CC785C', logoUrl: logoUrl || '' })} 
+            className="px-5 py-2.5 text-sm font-semibold bg-[#CC785C] hover:bg-[#D97757] disabled:opacity-50 text-white rounded-xl shadow-md transition-colors"
           >
             Зберегти
           </button>
@@ -583,26 +553,26 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
   const [tier, setTier] = useState(model?.tier || 'common');
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-gray-900 p-6 rounded-3xl w-full max-w-md shadow-2xl border border-gray-200 dark:border-gray-800 max-h-[92vh] overflow-y-auto my-auto space-y-4">
-        <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-800 pb-3">
-          <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 overflow-y-auto">
+      <div className="bg-[#242320] text-[#ECE8E1] p-6 rounded-3xl w-full max-w-md shadow-2xl border border-[#383632] max-h-[92vh] overflow-y-auto my-auto space-y-4">
+        <div className="flex justify-between items-center border-b border-[#33312D] pb-3">
+          <h3 className="text-lg font-bold text-[#ECE8E1]">
             {model ? 'Редагувати модель' : 'Додати нову модель'}
           </h3>
           <button 
             onClick={onClose} 
-            className="p-1 rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            className="p-1 rounded-full text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#302E2A] transition-colors"
           >
             <X size={20}/>
           </button>
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
             Постачальник *
           </label>
           <select 
-            className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+            className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] rounded-xl focus:outline-none focus:border-[#CC785C]" 
             value={providerId} 
             onChange={e=>setProviderId(e.target.value)}
           >
@@ -612,11 +582,11 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         
         {apiModels && apiModels.length > 0 ? (
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
               Модель із API *
             </label>
             <select 
-              className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] rounded-xl focus:outline-none focus:border-[#CC785C]" 
               value={apiId} 
               onChange={e => {
                 const val = e.target.value;
@@ -633,11 +603,11 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
           </div>
         ) : (
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
               API ID моделі *
             </label>
             <input 
-              className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
               placeholder="API ID (напр. gpt-4o)" 
               value={apiId} 
               onChange={e=>setApiId(e.target.value)} 
@@ -646,11 +616,11 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         )}
         
         <div>
-          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
             Назва моделі *
           </label>
           <input 
-            className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+            className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
             placeholder="Назва (напр. GPT-4o)" 
             value={name} 
             onChange={e=>setName(e.target.value)} 
@@ -659,11 +629,11 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
               Коротка ціна
             </label>
             <input 
-              className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
               placeholder="напр. $5-$30" 
               value={shortPrice} 
               onChange={e=>setShortPrice(e.target.value)} 
@@ -671,11 +641,11 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+            <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
               Рівень (RPG Tier)
             </label>
             <select 
-              className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] rounded-xl focus:outline-none focus:border-[#CC785C]" 
               value={tier} 
               onChange={e=>setTier(e.target.value)}
             >
@@ -689,11 +659,11 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
             Повний опис ціни
           </label>
           <input 
-            className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500" 
+            className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
             placeholder="напр. $5 вхід / $30 вихід за 1М токенів" 
             value={price} 
             onChange={e=>setPrice(e.target.value)} 
@@ -701,23 +671,23 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1.5">
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
             Опис моделі
           </label>
           <textarea 
             rows={2}
-            className="w-full p-2.5 text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" 
+            className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C] resize-none" 
             placeholder="Опис можливостей моделі..." 
             value={desc} 
             onChange={e=>setDesc(e.target.value)} 
           />
         </div>
 
-        <div className="flex gap-2.5 justify-end border-t border-gray-100 dark:border-gray-800 pt-4">
+        <div className="flex gap-2.5 justify-end border-t border-[#33312D] pt-4">
           <button 
             type="button"
             onClick={onClose} 
-            className="px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
+            className="px-4 py-2.5 text-sm font-medium text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#2F2E2B] rounded-xl transition-colors"
           >
             Скасувати
           </button>
@@ -725,7 +695,7 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
             type="button"
             disabled={!name.trim() || !apiId.trim()}
             onClick={() => onSave({ name: name.trim(), description: desc.trim(), apiModelId: apiId.trim(), priceInfo: price.trim(), shortPriceInfo: shortPrice.trim(), providerId, tier })} 
-            className="px-5 py-2.5 text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl shadow-md transition-colors"
+            className="px-5 py-2.5 text-sm font-semibold bg-[#CC785C] hover:bg-[#D97757] disabled:opacity-50 text-white rounded-xl shadow-md transition-colors"
           >
             Зберегти
           </button>
