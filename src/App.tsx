@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Settings, MessageCircle, ChevronLeft, Check, Key, Shield } from 'lucide-react';
+import { Settings, MessageCircle, ChevronLeft, Shield, Key } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
 import { AdminPanel } from './components/AdminPanel';
 import { Provider, AiModel } from './types';
 import { fetchModels, Model } from './lib/api';
 import { getProviders, getModels } from './lib/db';
-import { getTierClasses, getTierTextColor, getTierSubtextColor } from './lib/utils';
+import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
 declare global {
   interface Window {
@@ -72,12 +72,10 @@ export default function App() {
 
       const platform = window.Telegram.WebApp.platform;
       if (platform && platform !== 'unknown') {
-        // Fallback to 64px if the API is missing or returns a value that is too small for the native header
         const rawSafeTop = window.Telegram.WebApp.contentSafeAreaInset?.top || window.Telegram.WebApp.safeAreaInset?.top || 0;
         const safeTop = Math.max(rawSafeTop, 64);
         document.documentElement.style.setProperty('--safe-top', `${safeTop}px`);
         
-        // Let's also set header color to match our dark/light theme
         try {
           window.Telegram.WebApp.setHeaderColor(
             document.documentElement.classList.contains('dark') ? '#111827' : '#ffffff'
@@ -231,19 +229,33 @@ export default function App() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                  {providers.map((provider) => (
-                    <div 
-                      key={provider.id}
-                      onClick={() => openProvider(provider)}
-                      className="group cursor-pointer bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md transition-all flex flex-col items-center text-center aspect-[4/5] justify-center"
-                    >
-                      <div className={`w-16 h-16 rounded-2xl ${provider.color} text-white flex items-center justify-center font-bold text-2xl shadow-inner mb-4 group-hover:scale-110 transition-transform`}>
-                        {provider.name.charAt(0)}
+                  {providers.map((provider) => {
+                    const hexColor = resolveColorToHex(provider.color);
+                    return (
+                      <div 
+                        key={provider.id}
+                        onClick={() => openProvider(provider)}
+                        className="group cursor-pointer bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md transition-all flex flex-col items-center text-center aspect-[4/5] justify-center"
+                      >
+                        <div 
+                          style={{ backgroundColor: hexColor }}
+                          className="w-16 h-16 rounded-2xl text-white flex items-center justify-center font-bold text-2xl shadow-inner mb-4 group-hover:scale-110 transition-transform overflow-hidden relative"
+                        >
+                          {provider.logoUrl ? (
+                            <img 
+                              src={provider.logoUrl} 
+                              alt={provider.name} 
+                              className="w-full h-full object-contain p-2.5 drop-shadow-sm" 
+                            />
+                          ) : (
+                            <span>{provider.name.charAt(0).toUpperCase()}</span>
+                          )}
+                        </div>
+                        <h3 className="font-semibold text-gray-900 dark:text-white">{provider.name}</h3>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">{provider.description}</p>
                       </div>
-                      <h3 className="font-semibold text-gray-900 dark:text-white">{provider.name}</h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">{provider.description}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -253,13 +265,35 @@ export default function App() {
         {/* PROVIDER VIEW: Models List */}
         {currentView === 'provider' && selectedProvider && (
           <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">{selectedProvider.description}</p>
-            <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-2">Доступні моделі</h2>
+            {/* Provider banner */}
+            <div className="bg-white dark:bg-gray-900 rounded-2xl p-4 border border-gray-200 dark:border-gray-800 shadow-sm flex items-center gap-4">
+              <div 
+                style={{ backgroundColor: resolveColorToHex(selectedProvider.color) }}
+                className="w-14 h-14 rounded-2xl text-white flex items-center justify-center font-bold text-2xl shadow-sm shrink-0 overflow-hidden relative"
+              >
+                {selectedProvider.logoUrl ? (
+                  <img src={selectedProvider.logoUrl} alt={selectedProvider.name} className="w-full h-full object-contain p-2 drop-shadow-sm" />
+                ) : (
+                  <span>{selectedProvider.name.charAt(0).toUpperCase()}</span>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white leading-tight">{selectedProvider.name}</h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2">{selectedProvider.description}</p>
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center pt-2">
+              <h3 className="text-base font-bold text-gray-900 dark:text-white">Доступні моделі</h3>
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                {models.filter(m => m.providerId === selectedProvider.id).length} моделей
+              </span>
+            </div>
             
             <div className="space-y-3">
               {models
                 .filter(m => m.providerId === selectedProvider.id)
-                .filter(m => !apiKey || apiModels.some(am => am.id === m.apiModelId))
+                .filter(m => !apiKey || apiModels.length === 0 || apiModels.some(am => am.id === m.apiModelId))
                 .map(model => (
                 <div 
                   key={model.id}
@@ -288,7 +322,7 @@ export default function App() {
               ))}
               {models
                 .filter(m => m.providerId === selectedProvider.id)
-                .filter(m => !apiKey || apiModels.some(am => am.id === m.apiModelId))
+                .filter(m => !apiKey || apiModels.length === 0 || apiModels.some(am => am.id === m.apiModelId))
                 .length === 0 && (
                 <p className="text-sm text-gray-500 text-center py-8">Немає доступних моделей для цього постачальника за вашим API ключем.</p>
               )}
@@ -297,36 +331,54 @@ export default function App() {
         )}
 
         {/* MODEL DETAILS VIEW */}
-        {currentView === 'model' && selectedModelDetails && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-            <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 sm:p-8 border border-gray-200 dark:border-gray-800 shadow-sm text-center max-w-md mx-auto mt-4">
-              <div className={`w-20 h-20 mx-auto rounded-3xl ${providers.find(p => p.id === selectedModelDetails.providerId)?.color || 'bg-gray-600'} text-white flex items-center justify-center font-bold text-3xl shadow-inner mb-6`}>
-                 {providers.find(p => p.id === selectedModelDetails.providerId)?.name.charAt(0) || 'M'}
-              </div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{selectedModelDetails.name}</h2>
-              <p className="text-gray-600 dark:text-gray-400 mb-6">{selectedModelDetails.description}</p>
-              
-              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl p-4 mb-8 text-left">
-                <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
-                  <span className="text-sm text-gray-500">Вартість</span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">{selectedModelDetails.priceInfo}</span>
+        {currentView === 'model' && selectedModelDetails && (() => {
+          const prov = providers.find(p => p.id === selectedModelDetails.providerId);
+          const hexColor = resolveColorToHex(prov?.color || '#2563EB');
+          return (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
+              <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 sm:p-8 border border-gray-200 dark:border-gray-800 shadow-sm text-center max-w-md mx-auto mt-4">
+                <div 
+                  style={{ backgroundColor: hexColor }}
+                  className="w-20 h-20 mx-auto rounded-3xl text-white flex items-center justify-center font-bold text-3xl shadow-inner mb-6 overflow-hidden relative"
+                >
+                  {prov?.logoUrl ? (
+                    <img src={prov.logoUrl} alt={prov.name} className="w-full h-full object-contain p-3 drop-shadow-sm" />
+                  ) : (
+                    <span>{prov?.name.charAt(0).toUpperCase() || 'M'}</span>
+                  )}
                 </div>
-                <div className="flex justify-between items-center py-2">
-                  <span className="text-sm text-gray-500">API ID</span>
-                  <span className="text-xs font-mono bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-800 dark:text-gray-200">{selectedModelDetails.apiModelId}</span>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{selectedModelDetails.name}</h2>
+                <p className="text-gray-600 dark:text-gray-400 mb-6">{selectedModelDetails.description}</p>
+                
+                <div className="bg-gray-50 dark:bg-gray-800/50 rounded-2xl p-4 mb-8 text-left">
+                  <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                    <span className="text-sm text-gray-500">Постачальник</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: hexColor }} />
+                      {prov?.name || 'Невідомий'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-700">
+                    <span className="text-sm text-gray-500">Вартість</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">{selectedModelDetails.priceInfo}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-sm text-gray-500">API ID</span>
+                    <span className="text-xs font-mono bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-800 dark:text-gray-200">{selectedModelDetails.apiModelId}</span>
+                  </div>
                 </div>
-              </div>
 
-              <button
-                onClick={() => activateModelForChat(selectedModelDetails.apiModelId)}
-                className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2"
-              >
-                <MessageCircle size={20} />
-                Почати чат з цією моделлю
-              </button>
+                <button
+                  onClick={() => activateModelForChat(selectedModelDetails.apiModelId)}
+                  className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2"
+                >
+                  <MessageCircle size={20} />
+                  Почати чат з цією моделлю
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </main>
 
       {/* Floating Chat Button */}
@@ -348,7 +400,24 @@ export default function App() {
         apiKey={apiKey}
         selectedModel={activeChatModelId}
         onChangeModel={setActiveChatModelId}
-        apiModels={apiModels}
+        apiModels={models.length > 0
+          ? models
+              .filter(m => !apiKey || apiModels.length === 0 || apiModels.some(am => am.id === m.apiModelId))
+              .map(m => {
+                const prov = providers.find(p => p.id === m.providerId);
+                return {
+                  id: m.apiModelId,
+                  name: m.name,
+                  tier: m.tier,
+                  shortPriceInfo: m.shortPriceInfo,
+                  priceInfo: m.priceInfo,
+                  providerName: prov?.name,
+                  providerColor: prov?.color,
+                  providerLogoUrl: prov?.logoUrl,
+                };
+              })
+          : apiModels.map(am => ({ id: am.id, name: am.name, tier: 'common' }))
+        }
       />
 
       <SettingsModal 
@@ -370,5 +439,3 @@ export default function App() {
     </div>
   );
 }
-
-

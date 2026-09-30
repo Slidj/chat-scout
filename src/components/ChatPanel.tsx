@@ -1,14 +1,25 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles, X, AlertCircle, ChevronDown } from 'lucide-react';
-import { Message, generateChatResponse, Model } from '../lib/api';
+import { Message, generateChatResponse } from '../lib/api';
 import { ChatMessage } from './ChatMessage';
-import { getTierClasses, getTierTextColor, getTierSubtextColor } from '../lib/utils';
+import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from '../lib/utils';
+
+export interface ChatModelOption {
+  id: string;
+  name: string;
+  tier?: string;
+  shortPriceInfo?: string;
+  priceInfo?: string;
+  providerName?: string;
+  providerColor?: string;
+  providerLogoUrl?: string;
+}
 
 interface ChatPanelProps {
   apiKey: string;
   selectedModel: string | null;
   onChangeModel: (modelId: string) => void;
-  apiModels: Model[];
+  apiModels: ChatModelOption[];
   onClose: () => void;
   isOpen: boolean;
 }
@@ -20,6 +31,8 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const activeModelObj = apiModels.find(m => m.id === selectedModel);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -106,22 +119,37 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                   className={`flex items-center justify-between w-full cursor-pointer rounded-md overflow-hidden relative transition-colors border ${
                     selectedModel 
-                      ? getTierClasses(apiModels.find(m => m.id === selectedModel)?.tier).replace('shadow-[0_0_15px_rgba(245,158,11,0.2)]', '').replace('shadow-[0_0_15px_rgba(239,68,68,0.2)]', '').replace('shadow-[0_0_15px_rgba(168,85,247,0.2)]', '').replace('shadow-[0_0_15px_rgba(59,130,246,0.2)]', '').replace('border-gray-200', 'border-transparent').replace('dark:border-gray-800', 'border-transparent').replace('shadow-sm', '')
+                      ? getTierClasses(activeModelObj?.tier).replace('shadow-[0_0_15px_rgba(245,158,11,0.2)]', '').replace('shadow-[0_0_15px_rgba(239,68,68,0.2)]', '').replace('shadow-[0_0_15px_rgba(168,85,247,0.2)]', '').replace('shadow-[0_0_15px_rgba(59,130,246,0.2)]', '').replace('border-gray-200', 'border-transparent').replace('dark:border-gray-800', 'border-transparent').replace('shadow-sm', '')
                       : 'bg-transparent border-transparent'
                   }`}
                   style={{ padding: selectedModel ? '2px 6px' : '0' }}
                 >
-                  {selectedModel && apiModels.find(m => m.id === selectedModel)?.tier && apiModels.find(m => m.id === selectedModel)?.tier !== 'common' && (
+                  {selectedModel && activeModelObj?.tier && activeModelObj?.tier !== 'common' && (
                     <div className="stars-container opacity-50"></div>
                   )}
-                  <span className={`text-xs truncate relative z-10 ${selectedModel ? getTierTextColor(apiModels.find(m => m.id === selectedModel)?.tier) : 'text-gray-500'}`}>
-                    {selectedModel ? apiModels.find(m => m.id === selectedModel)?.name : 'Оберіть модель'}
-                  </span>
-                  <ChevronDown size={12} className={`relative z-10 ml-1 shrink-0 ${selectedModel ? getTierTextColor(apiModels.find(m => m.id === selectedModel)?.tier) : 'text-gray-500'}`} />
+                  <div className="flex items-center gap-1.5 min-w-0 z-10 relative">
+                    {activeModelObj?.providerLogoUrl ? (
+                      <div 
+                        style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
+                        className="w-4 h-4 rounded flex items-center justify-center shrink-0 overflow-hidden"
+                      >
+                        <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
+                      </div>
+                    ) : activeModelObj?.providerColor ? (
+                      <span 
+                        className="w-2 h-2 rounded-full shrink-0 border border-black/10" 
+                        style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
+                      />
+                    ) : null}
+                    <span className={`text-xs truncate ${selectedModel ? getTierTextColor(activeModelObj?.tier) : 'text-gray-500'}`}>
+                      {activeModelObj ? activeModelObj.name : 'Оберіть модель'}
+                    </span>
+                  </div>
+                  <ChevronDown size={12} className={`relative z-10 ml-1 shrink-0 ${selectedModel ? getTierTextColor(activeModelObj?.tier) : 'text-gray-500'}`} />
                 </div>
                 
                 {isDropdownOpen && (
-                  <div className="absolute top-full left-0 mt-1 w-64 max-h-64 overflow-y-auto bg-white dark:bg-[#1C2128] border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl z-50 flex flex-col p-1 gap-1">
+                  <div className="absolute top-full left-0 mt-1 w-72 max-h-72 overflow-y-auto bg-white dark:bg-[#1C2128] border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl z-50 flex flex-col p-1.5 gap-1">
                     {apiModels.map(m => (
                       <div
                         key={m.id}
@@ -129,12 +157,25 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                           onChangeModel(m.id);
                           setIsDropdownOpen(false);
                         }}
-                        className={`flex justify-between items-center px-3 py-2 rounded-lg cursor-pointer text-sm overflow-hidden relative transition-all ${getTierClasses(m.tier)}`}
+                        className={`flex justify-between items-center px-2.5 py-2 rounded-lg cursor-pointer text-sm overflow-hidden relative transition-all ${getTierClasses(m.tier)}`}
                       >
                         {m.tier && m.tier !== 'common' && (
                           <div className="stars-container"></div>
                         )}
-                        <div className="flex flex-col relative z-10 min-w-0 pr-2">
+                        <div className="flex items-center gap-2 relative z-10 min-w-0 pr-2">
+                          {m.providerLogoUrl ? (
+                            <div 
+                              style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
+                              className="w-5 h-5 rounded-md flex items-center justify-center shrink-0 overflow-hidden shadow-2xs"
+                            >
+                              <img src={m.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
+                            </div>
+                          ) : m.providerColor ? (
+                            <span 
+                              className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10" 
+                              style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
+                            />
+                          ) : null}
                           <span className={`font-medium truncate ${getTierTextColor(m.tier)}`}>{m.name}</span>
                         </div>
                         <div className="bg-emerald-50 dark:bg-emerald-900/40 border-l border-emerald-100 dark:border-emerald-800/50 pl-2 pr-1 py-0.5 rounded flex items-center justify-center shrink-0 relative z-10 ml-auto">
@@ -144,7 +185,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                               if (matches && matches.length >= 2) {
                                 return `${matches[0]}-${matches[1]}`;
                               }
-                              return m.priceInfo;
+                              return m.priceInfo || '';
                             })()}
                           </span>
                         </div>
@@ -179,13 +220,26 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
             <p className="text-sm text-gray-500 dark:text-gray-400">Оберіть модель з каталогу, щоб почати</p>
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-center">
-            <p className="text-sm text-gray-500 dark:text-gray-400">Напишіть повідомлення, щоб почати діалог з {selectedModel}</p>
+          <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-400">
+            {activeModelObj?.providerLogoUrl ? (
+              <div 
+                style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
+                className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3 shadow-sm overflow-hidden"
+              >
+                <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-2" />
+              </div>
+            ) : (
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-3">
+                <Sparkles size={24} />
+              </div>
+            )}
+            <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-sm mb-1">{activeModelObj?.name || 'Чат готовий'}</h3>
+            <p className="text-xs max-w-xs">{activeModelObj?.priceInfo ? `Вартість: ${activeModelObj.priceInfo}` : 'Напишіть перше повідомлення, щоб почати діалог'}</p>
           </div>
         ) : (
           <div className="flex flex-col flex-1">
-            {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
+            {messages.map((m) => (
+              <ChatMessage key={m.id} message={m} />
             ))}
             {isLoading && (
               <div className="flex justify-start mb-4">
@@ -202,25 +256,23 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       </main>
 
       {/* Input Area */}
-      <footer className="bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-3 shrink-0">
-        <div className="flex items-end gap-2">
-          <div className="relative flex-1 bg-gray-100 dark:bg-gray-800 rounded-xl border border-transparent focus-within:border-blue-500 focus-within:bg-white dark:focus-within:bg-gray-900 transition-all overflow-hidden">
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Повідомлення..."
-              className="w-full bg-transparent px-3 py-2.5 text-sm focus:outline-none text-gray-900 dark:text-white placeholder-gray-500"
-              disabled={isLoading || !selectedModel || !apiKey}
-            />
-          </div>
+      <footer className="p-3 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 shrink-0">
+        <div className="flex gap-2 items-center">
+          <input
+            type="text"
+            placeholder={!apiKey ? "Потрібен API ключ..." : !selectedModel ? "Оберіть модель..." : "Введіть повідомлення..."}
+            disabled={!apiKey || !selectedModel || isLoading}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            className="flex-1 px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 text-sm"
+          />
           <button
             onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading || !selectedModel || !apiKey}
-            className="flex-shrink-0 p-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 text-white rounded-xl transition-colors shadow-sm"
+            disabled={!inputValue.trim() || !apiKey || !selectedModel || isLoading}
+            className="p-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl transition-colors shrink-0 shadow-sm"
           >
-            <Send size={18} className={inputValue.trim() && !isLoading ? "translate-x-0.5 -translate-y-0.5 transition-transform" : ""} />
+            <Send size={18} />
           </button>
         </div>
       </footer>
