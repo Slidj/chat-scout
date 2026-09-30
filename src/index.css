@@ -2,16 +2,16 @@
 
 @layer base {
   :root {
-    --claude-bg: #171614;
+    --claude-bg: #181715;
     --claude-surface: #242320;
     --claude-surface-hover: #2C2A26;
     --claude-surface-active: #33312D;
     --claude-border: #363430;
     --claude-border-subtle: #2C2B27;
-    --claude-text: #ECE8E1;
+    --claude-text: #EDE9DF;
     --claude-text-muted: #9E9A92;
     --claude-accent: #CC785C;
-    --claude-bubble: #302E2B;
+    --claude-bubble: #2F2E2B;
     --font-serif: 'Instrument Serif', Georgia, serif;
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
@@ -28,6 +28,133 @@
   .font-claude-serif {
     font-family: var(--font-serif);
   }
+}
+
+/* Claude Markdown Typography Styles */
+.claude-markdown {
+  font-size: 17px;
+  line-height: 1.7;
+  color: #EDE9DF;
+  letter-spacing: -0.01em;
+}
+
+.claude-markdown p {
+  margin-top: 0;
+  margin-bottom: 1.15rem;
+}
+
+.claude-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.claude-markdown h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: #FFFFFF;
+  margin-top: 1.6rem;
+  margin-bottom: 0.6rem;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.claude-markdown h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #FFFFFF;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+
+.claude-markdown h3 {
+  font-size: 18.5px;
+  font-weight: 600;
+  color: #FFFFFF;
+  margin-top: 1.35rem;
+  margin-bottom: 0.45rem;
+  line-height: 1.35;
+}
+
+.claude-markdown h4 {
+  font-size: 17px;
+  font-weight: 600;
+  color: #FFFFFF;
+  margin-top: 1.1rem;
+  margin-bottom: 0.35rem;
+}
+
+.claude-markdown strong,
+.claude-markdown b {
+  font-weight: 600;
+  color: #FFFFFF;
+}
+
+.claude-markdown em,
+.claude-markdown i {
+  font-style: italic;
+  color: #EDE9DF;
+}
+
+.claude-markdown ul,
+.claude-markdown ol {
+  margin-top: 0.4rem;
+  margin-bottom: 1.15rem;
+  padding-left: 1.35rem;
+}
+
+.claude-markdown ul {
+  list-style-type: disc;
+}
+
+.claude-markdown ol {
+  list-style-type: decimal;
+}
+
+.claude-markdown li {
+  margin-bottom: 0.45rem;
+  line-height: 1.7;
+}
+
+.claude-markdown li > p {
+  margin-bottom: 0.35rem;
+}
+
+.claude-markdown blockquote {
+  border-left: 3px solid #CC785C;
+  padding-left: 1rem;
+  margin: 1.25rem 0;
+  color: #A39F97;
+  font-style: italic;
+}
+
+.claude-markdown pre {
+  background-color: #201F1C;
+  border: 1px solid #363430;
+  border-radius: 14px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 1.15rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: #ECE8E1;
+}
+
+.claude-markdown code:not(pre code) {
+  background-color: #272522;
+  border: 1px solid #3A3834;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 14.5px;
+  color: #CC785C;
+}
+
+.claude-markdown hr {
+  border: 0;
+  border-top: 1px solid #363430;
+  margin: 1.75rem 0;
 }
 
 @theme {

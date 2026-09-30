@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft,
+  Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
   Check
 } from 'lucide-react';
@@ -34,6 +34,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [isLoading, setIsLoading] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isAddSheetOpen, setIsAddSheetOpen] = useState(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   
   // Client-side typewriter animation state
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
@@ -44,6 +45,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
 
+  const mainScrollRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -61,8 +63,15 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
+  };
+
+  const handleScroll = () => {
+    if (!mainScrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = mainScrollRef.current;
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+    setShowScrollBottom(distanceToBottom > 140);
   };
 
   useEffect(() => {
@@ -235,11 +244,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#171614] text-[#ECE8E1] overflow-hidden">
+    <div className="fixed inset-0 z-50 flex flex-col bg-[#181715] text-[#EDE9DF] overflow-hidden">
       
       {/* Top Header - Claude Mobile App Style */}
       <header 
-        className="flex items-center justify-between px-4 pb-3 bg-[#171614] border-b border-[#2C2A26] shrink-0 z-20"
+        className="flex items-center justify-between px-4 pb-3 bg-[#181715] border-b border-[#2C2A26] shrink-0 z-20"
         style={{ paddingTop: 'calc(0.75rem + var(--safe-top, 0px))' }}
       >
         <div className="flex items-center gap-3">
@@ -248,14 +257,14 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               handleSkipTyping();
               onClose();
             }}
-            className="p-2 -ml-2 rounded-full hover:bg-[#252421] text-[#ECE8E1] transition-colors"
+            className="p-2 -ml-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"
             title="Назад"
           >
             <ArrowLeft size={22} />
           </button>
           
           <div className="flex items-center gap-2">
-            <span className="font-medium text-base text-[#ECE8E1] tracking-tight">
+            <span className="font-medium text-base text-[#EDE9DF] tracking-tight">
               {activeModelObj?.name || 'Чат'}
             </span>
           </div>
@@ -264,7 +273,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         <div className="flex items-center gap-1">
           <button
             onClick={handleNewChat}
-            className="p-2 rounded-full hover:bg-[#252421] text-[#ECE8E1] transition-colors"
+            className="p-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"
             title="Новий чат"
           >
             <Plus size={20} />
@@ -274,7 +283,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               handleSkipTyping();
               onClose();
             }}
-            className="p-2 rounded-full hover:bg-[#252421] text-[#9E9A92] hover:text-[#ECE8E1] transition-colors"
+            className="p-2 rounded-full hover:bg-[#252421] text-[#9E9A92] hover:text-[#EDE9DF] transition-colors"
             title="Закрити"
           >
             <X size={20} />
@@ -283,13 +292,17 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       </header>
 
       {/* Main Conversation Stream */}
-      <main className="flex-1 overflow-y-auto px-4 py-6 max-w-3xl mx-auto w-full flex flex-col">
+      <main 
+        ref={mainScrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 max-w-3xl mx-auto w-full flex flex-col relative"
+      >
         {!apiKey ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
             <div className="w-12 h-12 rounded-2xl bg-[#282723] text-[#CC785C] flex items-center justify-center mb-4">
               <Sparkles size={24} />
             </div>
-            <h3 className="font-semibold text-lg text-[#ECE8E1] mb-2">Потрібен API ключ</h3>
+            <h3 className="font-semibold text-lg text-[#EDE9DF] mb-2">Потрібен API ключ</h3>
             <p className="text-sm text-[#9E9A92] max-w-sm mb-4">
               Щоб почати спілкування з моделями, вкажіть ваш персональний ключ у налаштуваннях.
             </p>
@@ -308,7 +321,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                 <Sparkles size={26} />
               </div>
             )}
-            <h2 className="font-claude-serif text-3xl font-normal text-[#ECE8E1] mb-2 tracking-tight">
+            <h2 className="font-claude-serif text-3xl font-normal text-[#EDE9DF] mb-2 tracking-tight">
               {activeModelObj ? `Чим можу допомогти?` : 'Оберіть модель'}
             </h2>
             <p className="text-sm text-[#9E9A92] max-w-xs leading-relaxed">
@@ -338,16 +351,27 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
             <div ref={messagesEndRef} />
           </div>
         )}
+
+        {/* Floating Jump to Bottom Arrow Button (from Claude screenshot) */}
+        {showScrollBottom && (
+          <button
+            onClick={() => scrollToBottom(true)}
+            className="fixed bottom-28 left-1/2 -translate-x-1/2 w-9 h-9 rounded-full bg-[#2C2A26]/90 border border-[#403E3A] text-[#EDE9DF] hover:bg-[#383632] flex items-center justify-center shadow-lg backdrop-blur-sm z-30 transition-all active:scale-95 animate-in fade-in zoom-in-95"
+            title="До кінця чату"
+          >
+            <ArrowDown size={18} />
+          </button>
+        )}
       </main>
 
       {/* Signature Claude Input Box (Screenshot 4) */}
       <footer 
-        className="p-4 bg-gradient-to-t from-[#171614] via-[#171614] to-transparent shrink-0"
+        className="p-3 sm:p-4 bg-gradient-to-t from-[#181715] via-[#181715] to-transparent shrink-0"
         style={{ paddingBottom: 'calc(1rem + var(--safe-bottom, 0px))' }}
       >
         <div className="max-w-3xl mx-auto w-full bg-[#242320] border border-[#383632] rounded-3xl p-3 shadow-2xl transition-all focus-within:border-[#4E4B45]">
           
-          {/* Textarea */}
+          {/* Textarea with enhanced readable size (16.5px) */}
           <textarea
             ref={textareaRef}
             rows={1}
@@ -360,7 +384,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
             onKeyDown={handleKeyDown}
             placeholder={`Reply to ${activeModelObj?.name || 'Claude'}...`}
             disabled={!apiKey || !selectedModel || isLoading}
-            className="w-full bg-transparent px-2 pt-1 text-[15px] text-[#ECE8E1] placeholder-[#76736C] focus:outline-none resize-none leading-relaxed"
+            className="w-full bg-transparent px-2.5 pt-1 text-[16.5px] leading-[1.5] text-[#EDE9DF] placeholder-[#7E7B74] focus:outline-none resize-none"
             style={{ maxHeight: '120px' }}
           />
 
@@ -372,7 +396,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               <button
                 type="button"
                 onClick={() => setIsAddSheetOpen(true)}
-                className="w-8 h-8 rounded-full bg-[#302E2B] hover:bg-[#3B3935] text-[#ECE8E1] flex items-center justify-center transition-colors shrink-0"
+                className="w-8 h-8 rounded-full bg-[#302E2B] hover:bg-[#3B3935] text-[#EDE9DF] flex items-center justify-center transition-colors shrink-0"
                 title="Додати до чату"
               >
                 <Plus size={18} />
@@ -383,7 +407,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                 <button
                   type="button"
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="bg-[#302E2B] hover:bg-[#3B3935] border border-[#403D38] text-[#ECE8E1] rounded-full px-3 py-1.5 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                  className="bg-[#302E2B] hover:bg-[#3B3935] border border-[#403D38] text-[#EDE9DF] rounded-full px-3.5 py-1.5 text-[13px] font-medium flex items-center gap-1.5 transition-colors"
                 >
                   {activeModelObj?.providerLogoUrl ? (
                     <div 
@@ -393,10 +417,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                       <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
                     </div>
                   ) : null}
-                  <span className="truncate max-w-[120px]">
+                  <span className="truncate max-w-[130px]">
                     {activeModelObj ? activeModelObj.name : 'Оберіть модель'}
                   </span>
-                  <ChevronDown size={12} className="text-[#9E9A92] shrink-0" />
+                  <ChevronDown size={13} className="text-[#9E9A92] shrink-0" />
                 </button>
 
                 {/* Model Dropdown Menu */}
@@ -415,7 +439,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                         className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
                           m.id === selectedModel 
                             ? 'bg-[#33312D] text-white' 
-                            : 'hover:bg-[#2C2A26] text-[#ECE8E1]'
+                            : 'hover:bg-[#2C2A26] text-[#EDE9DF]'
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0 pr-2">
@@ -465,7 +489,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    className="w-9 h-9 rounded-full hover:bg-[#302E2B] text-[#9E9A92] hover:text-[#ECE8E1] flex items-center justify-center transition-colors"
+                    className="w-9 h-9 rounded-full hover:bg-[#302E2B] text-[#9E9A92] hover:text-[#EDE9DF] flex items-center justify-center transition-colors"
                     title="Голосовий ввід"
                   >
                     <Mic size={18} />
@@ -511,7 +535,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               >
                 <X size={20} />
               </button>
-              <h3 className="text-base font-bold text-[#ECE8E1]">Add to chat</h3>
+              <h3 className="text-base font-bold text-[#EDE9DF]">Add to chat</h3>
               <div className="w-6" />
             </div>
 
@@ -527,10 +551,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                   className="hidden" 
                   onChange={handleAttachFile} 
                 />
-                <div className="w-11 h-11 rounded-full bg-[#35332F] flex items-center justify-center text-[#ECE8E1]">
+                <div className="w-11 h-11 rounded-full bg-[#35332F] flex items-center justify-center text-[#EDE9DF]">
                   <Camera size={20} />
                 </div>
-                <span className="text-xs font-medium text-[#ECE8E1]">Camera</span>
+                <span className="text-xs font-medium text-[#EDE9DF]">Camera</span>
               </label>
 
               <label 
@@ -542,10 +566,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                   className="hidden" 
                   onChange={handleAttachFile} 
                 />
-                <div className="w-11 h-11 rounded-full bg-[#35332F] flex items-center justify-center text-[#ECE8E1]">
+                <div className="w-11 h-11 rounded-full bg-[#35332F] flex items-center justify-center text-[#EDE9DF]">
                   <ImageIcon size={20} />
                 </div>
-                <span className="text-xs font-medium text-[#ECE8E1]">Photos</span>
+                <span className="text-xs font-medium text-[#EDE9DF]">Photos</span>
               </label>
 
               <label 
@@ -557,10 +581,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                   className="hidden" 
                   onChange={handleAttachFile} 
                 />
-                <div className="w-11 h-11 rounded-full bg-[#35332F] flex items-center justify-center text-[#ECE8E1]">
+                <div className="w-11 h-11 rounded-full bg-[#35332F] flex items-center justify-center text-[#EDE9DF]">
                   <FileText size={20} />
                 </div>
-                <span className="text-xs font-medium text-[#ECE8E1]">Files</span>
+                <span className="text-xs font-medium text-[#EDE9DF]">Files</span>
               </label>
             </div>
 
@@ -570,11 +594,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               {/* Add to project */}
               <div className="flex items-center justify-between p-3.5 hover:bg-[#2A2925] transition-colors cursor-pointer">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#ECE8E1]">
+                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#EDE9DF]">
                     <FolderPlus size={16} />
                   </div>
                   <div>
-                    <div className="font-medium text-[#ECE8E1]">Add to project</div>
+                    <div className="font-medium text-[#EDE9DF]">Add to project</div>
                     <div className="text-xs text-[#8A8780]">None</div>
                   </div>
                 </div>
@@ -584,10 +608,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               {/* Web search toggle */}
               <div className="flex items-center justify-between p-3.5">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#ECE8E1]">
+                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#EDE9DF]">
                     <Globe size={16} />
                   </div>
-                  <span className="font-medium text-[#ECE8E1]">Web search</span>
+                  <span className="font-medium text-[#EDE9DF]">Web search</span>
                 </div>
                 <button
                   type="button"
@@ -607,10 +631,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               {/* Connectors */}
               <div className="flex items-center justify-between p-3.5 hover:bg-[#2A2925] transition-colors cursor-pointer">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#ECE8E1]">
+                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#EDE9DF]">
                     <Paperclip size={16} />
                   </div>
-                  <span className="font-medium text-[#ECE8E1]">Connectors</span>
+                  <span className="font-medium text-[#EDE9DF]">Connectors</span>
                 </div>
                 <span className="text-[#8A8780] text-sm">›</span>
               </div>
@@ -618,10 +642,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               {/* Memory toggle */}
               <div className="flex items-center justify-between p-3.5">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#ECE8E1]">
+                  <div className="w-8 h-8 rounded-lg bg-[#302E2B] flex items-center justify-center text-[#EDE9DF]">
                     <Clock size={16} />
                   </div>
-                  <span className="font-medium text-[#ECE8E1]">Memory</span>
+                  <span className="font-medium text-[#EDE9DF]">Memory</span>
                 </div>
                 <button
                   type="button"

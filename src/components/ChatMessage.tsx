@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw } from 'lucide-react';
 import { Message } from '../lib/api';
+import { MarkdownContent } from './MarkdownContent';
 
 interface ChatMessageProps {
   message: Message;
@@ -53,8 +54,8 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
   if (isUser) {
     return (
       <div className="flex w-full justify-end mb-6 animate-in fade-in slide-in-from-bottom-2 duration-200">
-        <div className="max-w-[85%] bg-[#302E2B] border border-[#3E3C38] text-[#ECE8E1] px-4 py-3 rounded-2xl shadow-xs">
-          <div className="whitespace-pre-wrap text-[15px] leading-relaxed select-text font-normal">
+        <div className="max-w-[85%] bg-[#2F2E2B] border border-[#3F3D38] text-[#F2EFEB] px-5 py-3.5 rounded-[22px] shadow-xs">
+          <div className="whitespace-pre-wrap text-[16.5px] leading-[1.55] select-text font-normal tracking-[-0.01em]">
             {message.text}
           </div>
         </div>
@@ -62,35 +63,27 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
     );
   }
 
-  // Claude-style Assistant response: directly on canvas
+  // Claude-style Assistant response: directly on canvas, with proper markdown typography
   return (
     <div className="flex flex-col w-full mb-8 animate-in fade-in duration-200">
       <div 
         onClick={isTyping ? onSkipTyping : undefined}
-        className={`text-[#ECE8E1] text-[15px] leading-relaxed whitespace-pre-wrap select-text pr-2 pl-0.5 ${
-          isTyping ? 'cursor-pointer' : ''
-        }`}
+        className={`pr-2 pl-0.5 ${isTyping ? 'cursor-pointer' : ''}`}
         title={isTyping ? "Натисніть щоб показати текст одразу" : undefined}
       >
-        {message.text}
-        {isTyping && (
-          <span 
-            className="inline-block w-2 h-4 ml-1.5 bg-[#CC785C] animate-pulse align-middle rounded-xs"
-            aria-hidden="true" 
-          />
-        )}
+        <MarkdownContent content={message.text} isTyping={isTyping} />
       </div>
 
       {/* Claude action icons bar - only shown when typing finishes */}
       {!isTyping && (
         <>
-          <div className="flex items-center gap-1.5 mt-3 text-[#9E9A92] animate-in fade-in duration-300">
+          <div className="flex items-center gap-1.5 mt-3.5 text-[#9E9A92] animate-in fade-in duration-300">
             <button
               onClick={handleCopy}
               className="p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors"
               title={copied ? "Скопійовано" : "Копіювати"}
             >
-              {copied ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
+              {copied ? <Check size={17} className="text-emerald-400" /> : <Copy size={17} />}
             </button>
 
             <button
@@ -98,7 +91,7 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
               className="p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors"
               title="Поділитися"
             >
-              <Share2 size={16} />
+              <Share2 size={17} />
             </button>
 
             <button
@@ -106,7 +99,7 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
               className={`p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors ${isPlayingAudio ? 'text-[#CC785C]' : ''}`}
               title="Озвучити"
             >
-              <Volume2 size={16} />
+              <Volume2 size={17} />
             </button>
 
             <button
@@ -114,7 +107,7 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
               className={`p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors ${feedback === 'up' ? 'text-emerald-400' : ''}`}
               title="Корисно"
             >
-              <ThumbsUp size={16} />
+              <ThumbsUp size={17} />
             </button>
 
             <button
@@ -122,7 +115,7 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
               className={`p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors ${feedback === 'down' ? 'text-red-400' : ''}`}
               title="Не сподобалось"
             >
-              <ThumbsDown size={16} />
+              <ThumbsDown size={17} />
             </button>
 
             {onRetry && (
@@ -131,13 +124,13 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
                 className="p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors"
                 title="Повторити генерацію"
               >
-                <RotateCcw size={16} />
+                <RotateCcw size={17} />
               </button>
             )}
           </div>
 
           {isLast && (
-            <div className="text-[12px] text-[#7A776F] mt-2 select-none font-normal pl-0.5 animate-in fade-in duration-300">
+            <div className="text-[13px] text-[#807C74] mt-2.5 select-none font-normal pl-0.5 animate-in fade-in duration-300">
               Claude is AI and can make mistakes.
             </div>
           )}
