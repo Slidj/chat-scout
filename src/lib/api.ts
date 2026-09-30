@@ -63,6 +63,10 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
   }
 }
 
+/**
+ * Generates chat completion in non-streaming mode (stream: false)
+ * to minimize server load on free-tier hosting.
+ */
 export async function generateChatResponse(
   apiKey: string,
   modelId: string,
@@ -84,11 +88,12 @@ export async function generateChatResponse(
     body: JSON.stringify({
       model: modelId,
       messages: messages,
+      stream: false // Explicitly disable server streaming to lower server load
     })
   });
 
   if (data && data.choices && data.choices.length > 0) {
-    return data.choices[0].message.content;
+    return data.choices[0].message?.content || data.choices[0].text || "";
   }
   throw new Error("Некоректна відповідь від API");
 }

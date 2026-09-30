@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, MoreVertical,
+  Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
   Check
 } from 'lucide-react';
@@ -35,6 +35,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isAddSheetOpen, setIsAddSheetOpen] = useState(false);
   
+  // Client-side typewriter animation state
+  const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
+  const typingTimerRef = useRef<number | null>(null);
+  const fullTextMapRef = useRef<Record<string, string>>({});
+
   // Toggles for "Add to chat" sheet
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
@@ -64,10 +69,76 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     if (isOpen) {
       scrollToBottom();
     }
-  }, [messages, isLoading, isOpen]);
+  }, [messages, isLoading, isOpen, typingMessageId]);
+
+  // Clean up any running typing timers on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimerRef.current) {
+        clearInterval(typingTimerRef.current);
+      }
+    };
+  }, []);
+
+  /**
+   * Animates text output on client side progressively without server stream
+   */
+  const animateTextReveal = (messageId: string, fullText: string) => {
+    fullTextMapRef.current[messageId] = fullText;
+    setTypingMessageId(messageId);
+
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+
+    // Adaptive speed calculation
+    const totalChars = fullText.length;
+    // Aim for smooth 1.2 to 3.2 seconds total duration
+    const targetDurationMs = Math.min(Math.max(totalChars * 12, 1000), 3200);
+    const intervalMs = 24; // ~40 updates per second
+    const totalSteps = targetDurationMs / intervalMs;
+    const charsPerStep = Math.max(1, Math.ceil(totalChars / totalSteps));
+
+    let currentLength = 0;
+
+    typingTimerRef.current = window.setInterval(() => {
+      currentLength += charsPerStep;
+
+      if (currentLength >= totalChars) {
+        currentLength = totalChars;
+        if (typingTimerRef.current) {
+          clearInterval(typingTimerRef.current);
+          typingTimerRef.current = null;
+        }
+        setTypingMessageId(null);
+      }
+
+      const chunk = fullText.slice(0, currentLength);
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: chunk } : m));
+    }, intervalMs);
+  };
+
+  /**
+   * Skips typing animation and reveals entire text immediately
+   */
+  const handleSkipTyping = () => {
+    if (typingMessageId && typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+      const fullText = fullTextMapRef.current[typingMessageId];
+      if (fullText) {
+        setMessages(prev => prev.map(m => m.id === typingMessageId ? { ...m, text: fullText } : m));
+      }
+      setTypingMessageId(null);
+    }
+  };
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !apiKey || !selectedModel || isLoading) return;
+
+    // If previous message was still typing, finish it immediately
+    handleSkipTyping();
 
     const userText = inputValue.trim();
     const newUserMessage: Message = {
@@ -83,25 +154,33 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     setIsLoading(true);
 
     try {
+      // 1. Fetch full non-streamed response from API (saves server resources on free tier)
       const responseText = await generateChatResponse(apiKey, selectedModel, userText, messages);
       
-      const newModelMessage: Message = {
-        id: (Date.now() + 1).toString(),
+      const newModelId = (Date.now() + 1).toString();
+      const placeholderModelMessage: Message = {
+        id: newModelId,
         role: 'model',
-        text: responseText,
+        text: '',
       };
       
-      setMessages((prev) => [...prev, newModelMessage]);
+      // Stop loading state
+      setIsLoading(false);
+
+      // Add empty message container
+      setMessages(prev => [...prev, placeholderModelMessage]);
+
+      // 2. Beautiful client-side typewriter animation
+      animateTextReveal(newModelId, responseText);
     } catch (error: any) {
       console.error(error);
+      setIsLoading(false);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'model',
         text: `Помилка: ${error.message || 'Щось пішло не так при зверненні до API. Перевірте ваш ключ та з\'єднання.'}`,
       };
       setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -112,7 +191,36 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     }
   };
 
+  const handleRetry = async () => {
+    if (messages.length === 0 || isLoading) return;
+    
+    // Find last user message
+    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+    if (!lastUserMessage || !apiKey || !selectedModel) return;
+
+    handleSkipTyping();
+    setIsLoading(true);
+
+    try {
+      const historyWithoutLastModel = messages.filter((_, idx) => idx < messages.length - 1);
+      const responseText = await generateChatResponse(apiKey, selectedModel, lastUserMessage.text, historyWithoutLastModel);
+      
+      const modelId = Date.now().toString();
+      setIsLoading(false);
+      setMessages(prev => [...prev.slice(0, -1), { id: modelId, role: 'model', text: '' }]);
+      animateTextReveal(modelId, responseText);
+    } catch (error: any) {
+      setIsLoading(false);
+      setMessages(prev => [...prev.slice(0, -1), { 
+        id: Date.now().toString(), 
+        role: 'model', 
+        text: `Помилка: ${error.message || 'Не вдалося повторити відповідь'}` 
+      }]);
+    }
+  };
+
   const handleNewChat = () => {
+    handleSkipTyping();
     setMessages([]);
   };
 
@@ -136,7 +244,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       >
         <div className="flex items-center gap-3">
           <button
-            onClick={onClose}
+            onClick={() => {
+              handleSkipTyping();
+              onClose();
+            }}
             className="p-2 -ml-2 rounded-full hover:bg-[#252421] text-[#ECE8E1] transition-colors"
             title="Назад"
           >
@@ -159,7 +270,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
             <Plus size={20} />
           </button>
           <button
-            onClick={onClose}
+            onClick={() => {
+              handleSkipTyping();
+              onClose();
+            }}
             className="p-2 rounded-full hover:bg-[#252421] text-[#9E9A92] hover:text-[#ECE8E1] transition-colors"
             title="Закрити"
           >
@@ -209,11 +323,14 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               <ChatMessage 
                 key={m.id} 
                 message={m} 
-                isLast={index === messages.length - 1} 
+                isLast={index === messages.length - 1}
+                isTyping={typingMessageId === m.id}
+                onSkipTyping={handleSkipTyping}
+                onRetry={index === messages.length - 1 && m.role === 'model' ? handleRetry : undefined}
               />
             ))}
             {isLoading && (
-              <div className="flex items-center gap-2 text-[#9E9A92] text-sm py-2">
+              <div className="flex items-center gap-2 text-[#9E9A92] text-sm py-2 animate-in fade-in">
                 <div className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
                 <span>Генерую відповідь...</span>
               </div>
