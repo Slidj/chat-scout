@@ -53,11 +53,18 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
 
   if (isUser) {
     return (
-      <div className="flex w-full justify-end mb-6 animate-in fade-in slide-in-from-bottom-2 duration-200">
-        <div className="max-w-[85%] bg-[#2F2E2B] border border-[#3F3D38] text-[#F2EFEB] px-5 py-3.5 rounded-[22px] shadow-xs">
+      <div className="flex w-full justify-end mb-6 animate-in fade-in slide-in-from-bottom-2 duration-200 group">
+        <div className="relative max-w-[85%] bg-[#2F2E2B] border border-[#3F3D38] text-[#F2EFEB] px-5 py-3.5 rounded-[22px] shadow-xs">
           <div className="whitespace-pre-wrap text-[16.5px] leading-[1.55] select-text font-normal tracking-[-0.01em]">
             {message.text}
           </div>
+          <button
+            onClick={handleCopy}
+            className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-[#9E9A92] hover:text-[#EDE9DF] hover:bg-[#252421] transition-all"
+            title="Скопіювати запит"
+          >
+            {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+          </button>
         </div>
       </div>
     );
@@ -87,10 +94,11 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
           <div className="flex items-center gap-1.5 mt-3.5 text-[#9E9A92] animate-in fade-in duration-300">
             <button
               onClick={handleCopy}
-              className="p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors"
+              className="flex items-center gap-1.5 p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors"
               title={copied ? "Скопійовано" : "Копіювати"}
             >
               {copied ? <Check size={17} className="text-emerald-400" /> : <Copy size={17} />}
+              {copied && <span className="text-xs text-emerald-400 font-medium">Скопійовано</span>}
             </button>
 
             <button

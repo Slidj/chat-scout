@@ -124,21 +124,18 @@
   border-left: 3px solid #CC785C;
   padding-left: 1rem;
   margin: 1.25rem 0;
-  color: #A39F97;
+  color: #B8B4AA;
   font-style: italic;
+  background-color: rgba(33, 32, 29, 0.4);
+  padding: 0.6rem 1rem;
+  border-radius: 0 0.75rem 0.75rem 0;
 }
 
 .claude-markdown pre {
-  background-color: #201F1C;
-  border: 1px solid #363430;
-  border-radius: 14px;
-  padding: 14px 16px;
-  overflow-x: auto;
-  margin: 1.15rem 0;
+  margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 14.5px;
-  line-height: 1.55;
-  color: #ECE8E1;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .claude-markdown code:not(pre code) {
@@ -147,8 +144,9 @@
   padding: 2px 6px;
   border-radius: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 14.5px;
+  font-size: 14px;
   color: #CC785C;
+  font-weight: 500;
 }
 
 .claude-markdown hr {
@@ -156,6 +154,121 @@
   border-top: 1px solid #363430;
   margin: 1.75rem 0;
 }
+
+/* GFM Tables */
+.claude-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.claude-markdown th {
+  background-color: #22201D;
+  color: #EDE9DF;
+  font-weight: 600;
+  padding: 10px 14px;
+  border-bottom: 1px solid #383632;
+  font-size: 14px;
+  text-align: left;
+}
+
+.claude-markdown td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #2B2925;
+  color: #D8D4CA;
+  font-size: 14px;
+}
+
+.claude-markdown tr:last-child td {
+  border-bottom: none;
+}
+
+.claude-markdown tbody tr:hover {
+  background-color: rgba(40, 38, 35, 0.5);
+}
+
+/* Task list checkboxes */
+.claude-markdown input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #CC785C;
+  border-radius: 4px;
+  background-color: #1F1E1B;
+  margin-right: 8px;
+  vertical-align: -2.5px;
+  position: relative;
+  cursor: default;
+}
+
+.claude-markdown input[type="checkbox"]:checked {
+  background-color: #CC785C;
+}
+
+.claude-markdown input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Syntax Highlighting Tokens (Claude Dark Palette) */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-subst {
+  color: #CC785C;
+  font-weight: 600;
+}
+
+.hljs-string,
+.hljs-title,
+.hljs-section {
+  color: #84C28D;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #7E7A72;
+  font-style: italic;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #E5A876;
+}
+
+.hljs-function,
+.hljs-attr,
+.hljs-attribute {
+  color: #DFC17B;
+}
+
+.hljs-type,
+.hljs-class {
+  color: #7CB7E8;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: #EDE9DF;
+}
+
+.hljs-built_in,
+.hljs-symbol {
+  color: #E08A6E;
+}
+
+/* Global Smooth Text Selection */
+::selection {
+  background-color: rgba(204, 120, 92, 0.35);
+  color: #FFFFFF;
+}
+
 
 @theme {
   --animate-shimmer: shimmer 3s infinite linear;
