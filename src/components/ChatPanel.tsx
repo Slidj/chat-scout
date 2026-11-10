@@ -7,6 +7,7 @@ import {
 import { Message, generateChatResponse } from '../lib/api';
 import { ChatMessage } from './ChatMessage';
 import { getTierClasses, getTierTextColor, resolveColorToHex } from '../lib/utils';
+import { logQueryEvent, getOrInitClientId } from '../lib/db';
 
 export interface ChatModelOption {
   id: string;
@@ -26,9 +27,10 @@ interface ChatPanelProps {
   apiModels: ChatModelOption[];
   onClose: () => void;
   isOpen: boolean;
+  currentUser?: any;
 }
 
-export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onClose, isOpen }: ChatPanelProps) {
+export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onClose, isOpen, currentUser }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -162,10 +164,22 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setIsLoading(true);
 
+    const startTime = Date.now();
     try {
       // 1. Fetch full non-streamed response from API (saves server resources on free tier)
       const responseText = await generateChatResponse(apiKey, selectedModel, userText, messages);
+      const durationMs = Date.now() - startTime;
       
+      // Log real query to Firestore
+      logQueryEvent({
+        userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
+        userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
+        modelId: selectedModel,
+        promptSnippet: userText.slice(0, 100),
+        durationMs,
+        status: 'success'
+      });
+
       const newModelId = (Date.now() + 1).toString();
       const placeholderModelMessage: Message = {
         id: newModelId,
@@ -183,6 +197,18 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       animateTextReveal(newModelId, responseText);
     } catch (error: any) {
       console.error(error);
+      const durationMs = Date.now() - startTime;
+      
+      logQueryEvent({
+        userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
+        userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
+        modelId: selectedModel,
+        promptSnippet: userText.slice(0, 100),
+        durationMs,
+        status: 'error',
+        errorMessage: error.message
+      });
+
       setIsLoading(false);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),

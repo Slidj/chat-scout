@@ -13,5 +13,8 @@ service cloud.firestore {
     match /activity/{activityId} {
       allow read, write: if true;
     }
+    match /queries/{queryId} {
+      allow read, write: if true;
+    }
   }
 }

@@ -97,7 +97,11 @@ export default function App() {
         if (telegramUser.id === ADMIN_TELEGRAM_ID) {
           isUserAdmin = true;
         }
+      } else {
+        trackUserSession();
       }
+    } else {
+      trackUserSession();
     }
 
     if (window.location.search.includes('admin=true')) {
@@ -668,6 +672,7 @@ export default function App() {
         selectedModel={activeChatModelId}
         onChangeModel={setActiveChatModelId}
         apiModels={enrichedChatModels}
+        currentUser={tgUser}
       />
 
       {/* Settings Modal */}
