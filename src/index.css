@@ -207,3 +207,21 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #4A4742;
 }
+
+/* Inline Claude Cursor for streaming text */
+.claude-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 1.18em;
+  margin-left: 3px;
+  background-color: #CC785C;
+  border-radius: 2px;
+  vertical-align: -0.15em;
+  animation: claude-blink 0.85s ease-in-out infinite;
+}
+
+@keyframes claude-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+

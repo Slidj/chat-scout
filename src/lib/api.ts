@@ -89,7 +89,10 @@ export async function streamChatResponse(
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'X-Accel-Buffering': 'no'
         },
         body: JSON.stringify({
           model: modelId,
@@ -106,7 +109,14 @@ export async function streamChatResponse(
         throw new Error("Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.");
       }
       if (!response.ok) {
-        throw new Error(`HTTP помилка ${response.status} від ${baseUrl}`);
+        let errMsg = '';
+        try {
+          const errData = await response.json();
+          errMsg = errData?.error?.message || errData?.message || '';
+        } catch {
+          errMsg = await response.text();
+        }
+        throw new Error(errMsg || `HTTP помилка ${response.status} від ${baseUrl}`);
       }
 
       if (!response.body) {
@@ -135,13 +145,29 @@ export async function streamChatResponse(
             const jsonStr = trimmed.slice(6);
             try {
               const parsed = JSON.parse(jsonStr);
-              const deltaContent = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
+              if (parsed.error) {
+                throw new Error(parsed.error.message || 'Помилка провайдера ШІ');
+              }
+              const delta = parsed.choices?.[0]?.delta;
+              let deltaContent = '';
+              if (typeof delta?.content === 'string') {
+                deltaContent = delta.content;
+              } else if (Array.isArray(delta?.content)) {
+                deltaContent = delta.content.map((c: any) => (typeof c === 'string' ? c : c?.text || '')).join('');
+              } else if (typeof parsed.choices?.[0]?.text === 'string') {
+                deltaContent = parsed.choices[0].text;
+              } else if (typeof parsed.choices?.[0]?.message?.content === 'string') {
+                deltaContent = parsed.choices[0].message.content;
+              }
+
               if (deltaContent) {
                 accumulatedText += deltaContent;
                 onChunk(deltaContent, accumulatedText);
               }
-            } catch (err) {
-              // Partial JSON, continue buffer
+            } catch (err: any) {
+              if (err.message && !err.message.includes('JSON')) {
+                throw err;
+              }
             }
           }
         }
@@ -151,7 +177,8 @@ export async function streamChatResponse(
       if (buffer.trim().startsWith('data: ') && buffer.trim() !== 'data: [DONE]') {
         try {
           const parsed = JSON.parse(buffer.trim().slice(6));
-          const deltaContent = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
+          const delta = parsed.choices?.[0]?.delta;
+          const deltaContent = typeof delta?.content === 'string' ? delta.content : (parsed.choices?.[0]?.text || '');
           if (deltaContent) {
             accumulatedText += deltaContent;
             onChunk(deltaContent, accumulatedText);
@@ -163,20 +190,20 @@ export async function streamChatResponse(
         return accumulatedText;
       }
 
-      throw new Error("Отримано порожній потік тексту");
+      throw new Error("Отримано порожній потік тексту від моделі");
     } catch (err: any) {
       if (err.name === 'AbortError') {
         throw err;
       }
       console.warn(`Стрімінг не вдався для ${baseUrl}, пробуємо наступний сервер...`, err);
       lastError = err;
-      if (err.message && (err.message.includes("401") || err.message.includes("402"))) {
+      if (err.message && (err.message.includes("401") || err.message.includes("402") || err.message.includes("rate-limited"))) {
         throw err;
       }
     }
   }
 
-  // Graceful fallback to non-streaming if proxy blocked SSE
+  // Fallback to non-streaming only if SSE connection was rejected
   console.warn("Стрімінг не спрацював, викликаємо fallback non-streaming режим...");
   const nonStreamResult = await generateChatResponse(apiKey, modelId, prompt, history);
   onChunk(nonStreamResult, nonStreamResult);

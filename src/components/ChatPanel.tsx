@@ -42,6 +42,12 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // High-performance Fluid Token Stream Refs (Liquid Text Pacing)
+  const streamTargetRef = useRef<string>('');
+  const streamDisplayedRef = useRef<string>('');
+  const streamFrameIdRef = useRef<number | null>(null);
+  const isStreamingActiveRef = useRef<boolean>(false);
+
   // Toggles for "Add to chat" sheet
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
@@ -81,14 +87,103 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     }
   }, [messages, isLoading, isOpen, typingMessageId]);
 
-  // Clean up any running stream on unmount
+  // Clean up any running stream and animation frame on unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      if (streamFrameIdRef.current) {
+        cancelAnimationFrame(streamFrameIdRef.current);
+      }
     };
   }, []);
+
+  /**
+   * Fluid Token Stream Loop (60 FPS Pacing)
+   * Eliminates all network packet jumps, stuttering, and layout flashing
+   */
+  const stopFluidLoop = () => {
+    if (streamFrameIdRef.current) {
+      cancelAnimationFrame(streamFrameIdRef.current);
+      streamFrameIdRef.current = null;
+    }
+  };
+
+  const startFluidLoop = (targetMessageId: string) => {
+    if (streamFrameIdRef.current) return;
+
+    const tick = () => {
+      const target = streamTargetRef.current;
+      const current = streamDisplayedRef.current;
+
+      if (current.length < target.length) {
+        const diff = target.length - current.length;
+
+        // Dynamic fluid pacing:
+        // When diff is small (1-10 chars): 1-2 chars per frame (~60-120 chars/sec) - smooth liquid stream
+        // When diff is large (e.g. 50-200 chars burst from network buffer):
+        // smoothly accelerates so it never falls behind, but avoids single-frame jarring dumps
+        let step = 1;
+        if (diff > 160) {
+          step = Math.min(Math.ceil(diff / 6), 14);
+        } else if (diff > 80) {
+          step = Math.min(Math.ceil(diff / 8), 10);
+        } else if (diff > 30) {
+          step = Math.min(Math.ceil(diff / 10), 5);
+        } else if (diff > 8) {
+          step = 2;
+        } else {
+          step = 1;
+        }
+
+        const nextLen = Math.min(current.length + step, target.length);
+        const nextText = target.slice(0, nextLen);
+        streamDisplayedRef.current = nextText;
+
+        setMessages(prev =>
+          prev.map(m => m.id === targetMessageId ? { ...m, text: nextText } : m)
+        );
+
+        // Smooth scroll follow if user is near bottom
+        if (mainScrollRef.current) {
+          const { scrollTop, scrollHeight, clientHeight } = mainScrollRef.current;
+          const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+          if (distanceToBottom < 140) {
+            mainScrollRef.current.scrollTop = scrollHeight;
+          }
+        }
+
+        streamFrameIdRef.current = requestAnimationFrame(tick);
+      } else if (!isStreamingActiveRef.current) {
+        // Stream completed and queue fully emptied
+        stopFluidLoop();
+        setTypingMessageId(null);
+      } else {
+        // Waiting for next chunk from network
+        streamFrameIdRef.current = requestAnimationFrame(tick);
+      }
+    };
+
+    streamFrameIdRef.current = requestAnimationFrame(tick);
+  };
+
+  /**
+   * Fast-forwards the fluid animation to show all received text immediately on tap
+   */
+  const handleFastForward = (messageId: string) => {
+    if (typingMessageId === messageId) {
+      const target = streamTargetRef.current;
+      if (target) {
+        streamDisplayedRef.current = target;
+        setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: target } : m));
+      }
+      if (!isStreamingActiveRef.current) {
+        stopFluidLoop();
+        setTypingMessageId(null);
+      }
+    }
+  };
 
   /**
    * Stops ongoing generation immediately
@@ -98,6 +193,8 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    isStreamingActiveRef.current = false;
+    stopFluidLoop();
     setIsLoading(false);
     setTypingMessageId(null);
   };
@@ -105,10 +202,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !apiKey || !selectedModel || isLoading) return;
 
-    // Abort any previous request
+    // Abort any previous request & stop fluid loop
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
+    stopFluidLoop();
 
     const userText = inputValue.trim();
     const newUserMessage: Message = {
@@ -134,25 +232,30 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     setIsLoading(true);
     setTypingMessageId(newModelId);
 
+    // Reset fluid stream buffers
+    streamTargetRef.current = '';
+    streamDisplayedRef.current = '';
+    isStreamingActiveRef.current = true;
+
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const startTime = Date.now();
 
     try {
-      // Real-time token streaming with zero perceived delay
+      // Real-time token streaming with smooth fluid animation
       await streamChatResponse(
         apiKey,
         selectedModel,
         userText,
         newHistory.slice(0, -1),
         (_chunk, accumulated) => {
-          setMessages(prev =>
-            prev.map(m => m.id === newModelId ? { ...m, text: accumulated } : m)
-          );
-          scrollToBottom(false);
+          streamTargetRef.current = accumulated;
+          startFluidLoop(newModelId);
         },
         abortController.signal
       );
+
+      isStreamingActiveRef.current = false;
 
       const durationMs = Date.now() - startTime;
       logQueryEvent({
@@ -164,6 +267,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         status: 'success'
       });
     } catch (error: any) {
+      isStreamingActiveRef.current = false;
       if (error.name === 'AbortError') {
         // Generation cancelled by user, keep whatever text was generated
         return;
@@ -181,6 +285,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         errorMessage: error.message
       });
 
+      stopFluidLoop();
       setMessages(prev =>
         prev.map(m => m.id === newModelId
           ? { 
@@ -194,7 +299,6 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       );
     } finally {
       setIsLoading(false);
-      setTypingMessageId(null);
       abortControllerRef.current = null;
     }
   };
@@ -216,6 +320,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
+    stopFluidLoop();
 
     const modelId = Date.now().toString();
     const historyWithoutLast = messages[messages.length - 1].role === 'model'
@@ -225,6 +330,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     setMessages([...historyWithoutLast, { id: modelId, role: 'model', text: '' }]);
     setIsLoading(true);
     setTypingMessageId(modelId);
+
+    // Reset fluid stream buffers
+    streamTargetRef.current = '';
+    streamDisplayedRef.current = '';
+    isStreamingActiveRef.current = true;
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -237,13 +347,13 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         lastUserMessage.text,
         historyWithoutLast.slice(0, -1),
         (_chunk, accumulated) => {
-          setMessages(prev =>
-            prev.map(m => m.id === modelId ? { ...m, text: accumulated } : m)
-          );
-          scrollToBottom(false);
+          streamTargetRef.current = accumulated;
+          startFluidLoop(modelId);
         },
         abortController.signal
       );
+
+      isStreamingActiveRef.current = false;
 
       const durationMs = Date.now() - startTime;
       logQueryEvent({
@@ -255,7 +365,9 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         status: 'success'
       });
     } catch (error: any) {
+      isStreamingActiveRef.current = false;
       if (error.name === 'AbortError') return;
+      stopFluidLoop();
       setMessages(prev =>
         prev.map(m => m.id === modelId
           ? { 
@@ -269,7 +381,6 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       );
     } finally {
       setIsLoading(false);
-      setTypingMessageId(null);
       abortControllerRef.current = null;
     }
   };
@@ -384,7 +495,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                 message={m} 
                 isLast={index === messages.length - 1}
                 isTyping={typingMessageId === m.id}
-                onSkipTyping={handleStopGenerating}
+                onSkipTyping={() => handleFastForward(m.id)}
                 onRetry={index === messages.length - 1 && m.role === 'model' ? handleRetry : undefined}
               />
             ))}
