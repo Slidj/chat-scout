@@ -49,11 +49,15 @@ export interface AppUser {
   firstName?: string;
   lastName?: string;
   username?: string;
+  photoUrl?: string;
   lastActive: string;
   firstSeen: string;
   totalQueries?: number;
   lastModelUsed?: string;
   platform?: string;
+  isBlocked?: boolean;
+  blockedAt?: string;
+  blockedReason?: string;
 }
 
 export interface ActivityEvent {
@@ -86,7 +90,7 @@ export const getOrInitClientId = (): string => {
   return id;
 };
 
-export const trackUserSession = async (user?: any) => {
+export const trackUserSession = async (user?: any): Promise<boolean> => {
   try {
     const isTg = !!user?.id;
     const userId = isTg ? String(user.id) : getOrInitClientId();
@@ -104,14 +108,17 @@ export const trackUserSession = async (user?: any) => {
       if (user.first_name) payload.firstName = user.first_name;
       if (user.last_name) payload.lastName = user.last_name;
       if (user.username) payload.username = user.username;
+      if (user.photo_url) payload.photoUrl = user.photo_url;
     } else {
       payload.firstName = 'Web User';
       payload.username = userId.slice(0, 8);
     }
 
+    // Preserve existing isBlocked status if already blocked
     await setDoc(userRef, {
       firstSeen: now,
       totalQueries: 0,
+      isBlocked: false,
       ...payload
     }, { merge: true });
 
@@ -122,9 +129,60 @@ export const trackUserSession = async (user?: any) => {
       user: isTg ? (user.first_name || `@${user.username}`) : 'Web User',
       timestamp: now
     });
+
+    return true;
   } catch (err) {
     console.warn('Could not track user session:', err);
+    return false;
   }
+};
+
+export const deleteUser = async (userId: string) => {
+  try {
+    await deleteDoc(doc(db, 'users', userId));
+    await addDoc(collection(db, 'activity'), {
+      type: 'admin_action',
+      description: `Видалено користувача ID: ${userId}`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error deleting user:', err);
+    throw err;
+  }
+};
+
+export const toggleBlockUser = async (userId: string, isBlocked: boolean, reason?: string) => {
+  try {
+    const userRef = doc(db, 'users', userId);
+    const now = new Date().toISOString();
+    await setDoc(userRef, {
+      isBlocked,
+      blockedAt: isBlocked ? now : null,
+      blockedReason: isBlocked ? (reason || 'Обмеження доступу за рішенням адміністрації') : null
+    }, { merge: true });
+
+    await addDoc(collection(db, 'activity'), {
+      type: 'admin_action',
+      description: isBlocked ? `Заблоковано користувача ${userId}` : `Розблоковано користувача ${userId}`,
+      timestamp: now
+    });
+  } catch (err) {
+    console.error('Error toggling block on user:', err);
+    throw err;
+  }
+};
+
+export const subscribeToCurrentUser = (userId: string, callback: (user: AppUser | null) => void): Unsubscribe => {
+  const userRef = doc(db, 'users', userId);
+  return onSnapshot(userRef, (docSnap) => {
+    if (docSnap.exists()) {
+      callback({ id: docSnap.id, ...docSnap.data() } as AppUser);
+    } else {
+      callback(null);
+    }
+  }, (err) => {
+    console.warn('Current user subscription error:', err);
+  });
 };
 
 export const logQueryEvent = async (data: {

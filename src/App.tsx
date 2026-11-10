@@ -8,7 +8,7 @@ import { ChatPanel } from './components/ChatPanel';
 import { AdminPanel } from './components/AdminPanel';
 import { Provider, AiModel } from './types';
 import { fetchModels, Model } from './lib/api';
-import { getProviders, getModels, trackUserSession } from './lib/db';
+import { getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId } from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
 declare global {
@@ -44,6 +44,8 @@ export default function App() {
   const [activeChatModelId, setActiveChatModelId] = useState<string>(''); // The actual model ID used for chat
 
   const [tgUser, setTgUser] = useState<any>(null);
+  const [isUserBlocked, setIsUserBlocked] = useState(false);
+  const [blockedReason, setBlockedReason] = useState<string | null>(null);
 
   const loadData = async () => {
     setIsLoadingData(true);
@@ -91,6 +93,8 @@ export default function App() {
       }
 
       const telegramUser = window.Telegram.WebApp.initDataUnsafe?.user;
+      const currentUid = telegramUser?.id ? String(telegramUser.id) : getOrInitClientId();
+      
       if (telegramUser) {
         setTgUser(telegramUser);
         trackUserSession(telegramUser);
@@ -100,8 +104,31 @@ export default function App() {
       } else {
         trackUserSession();
       }
+
+      // Live subscription to block status
+      subscribeToCurrentUser(currentUid, (u) => {
+        if (u?.isBlocked) {
+          setIsUserBlocked(true);
+          setBlockedReason(u.blockedReason || 'Обмеження доступу за рішенням адміністрації');
+          setIsChatOpen(false);
+        } else {
+          setIsUserBlocked(false);
+          setBlockedReason(null);
+        }
+      });
     } else {
+      const currentUid = getOrInitClientId();
       trackUserSession();
+      subscribeToCurrentUser(currentUid, (u) => {
+        if (u?.isBlocked) {
+          setIsUserBlocked(true);
+          setBlockedReason(u.blockedReason || 'Обмеження доступу за рішенням адміністрації');
+          setIsChatOpen(false);
+        } else {
+          setIsUserBlocked(false);
+          setBlockedReason(null);
+        }
+      });
     }
 
     if (window.location.search.includes('admin=true')) {
@@ -150,6 +177,7 @@ export default function App() {
   };
 
   const activateModelForChat = (apiModelId: string) => {
+    if (isUserBlocked) return;
     if (!apiKey) {
       alert("Будь ласка, введіть ваш персональний API ключ у налаштуваннях для використання чату.");
       setIsSettingsOpen(true);
@@ -160,6 +188,7 @@ export default function App() {
   };
 
   const handleStartNewChat = () => {
+    if (isUserBlocked) return;
     if (!apiKey) {
       setIsSettingsOpen(true);
       return;
@@ -693,6 +722,49 @@ export default function App() {
           apiModels={apiModels}
           currentUser={tgUser}
         />
+      )}
+
+      {/* Blocked User Polite Notice Modal */}
+      {isUserBlocked && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-[#242320] text-[#ECE8E1] p-6 sm:p-8 rounded-3xl w-full max-w-md shadow-2xl border border-[#443830] text-center space-y-4">
+            <div className="w-16 h-16 rounded-3xl bg-[#3D2820] text-[#CC785C] border border-[#5A382A] flex items-center justify-center mx-auto shadow-md">
+              <Shield size={32} />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-[#FAF8F5] tracking-tight">
+                Доступ до сервісу обмежено
+              </h3>
+              <p className="text-xs sm:text-sm text-[#A09D95] leading-relaxed">
+                Шановний користувачу! Наразі дія вашого облікового запису тимчасово призупинена відповідно до правил використання або за рішенням адміністрації.
+              </p>
+            </div>
+
+            {blockedReason && (
+              <div className="p-3 bg-[#1B1A17] border border-[#33312D] rounded-2xl text-xs text-[#8E8B83]">
+                <span className="font-semibold text-[#CC785C]">Причина:</span> {blockedReason}
+              </div>
+            )}
+
+            <div className="pt-2 flex flex-col gap-2">
+              <a 
+                href="https://t.me/slidj71" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="w-full py-3 bg-[#CC785C] hover:bg-[#D97757] text-white rounded-2xl text-xs sm:text-sm font-semibold transition-all shadow-md active:scale-95 flex items-center justify-center gap-2"
+              >
+                <span>Зв'язатися з адміністратором</span>
+              </a>
+              <button
+                onClick={() => window.location.reload()}
+                className="w-full py-2.5 bg-[#1B1A17] hover:bg-[#2B2A27] text-[#8E8B83] hover:text-[#ECE8E1] rounded-2xl text-xs font-medium border border-[#363430] transition-colors"
+              >
+                Оновити статус
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

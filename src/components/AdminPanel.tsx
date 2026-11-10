@@ -3,6 +3,7 @@ import {
   getProviders, getModels, saveProvider, updateProvider, deleteProvider, 
   saveModel, updateModel, deleteModel, getUsers, getRecentActivities, getQueries,
   subscribeToUsers, subscribeToQueries, subscribeToActivities,
+  deleteUser, toggleBlockUser,
   AppUser, ActivityEvent, QueryLog, logActivityEvent
 } from '../lib/db';
 import { fetchModels } from '../lib/api';
@@ -12,7 +13,8 @@ import {
   LayoutDashboard, Building2, Cpu, Key, Users, Menu, TrendingUp, 
   Clock, RefreshCw, Eye, EyeOff, Search, ChevronRight, Activity, 
   Sparkles, CheckCircle2, AlertCircle, BarChart3, Globe, Zap,
-  UserCheck, ArrowUpRight, Info
+  UserCheck, ArrowUpRight, Copy, Ban, Unlock, ChevronLeft,
+  ChevronsLeft, ChevronsRight, Info
 } from 'lucide-react';
 import { resolveColorToHex, COLOR_PRESETS, ColorPreset, resizeImageFile, getTierClasses } from '../lib/utils';
 
@@ -66,6 +68,27 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [modelProviderFilter, setModelProviderFilter] = useState<string>('all');
   const [userSearch, setUserSearch] = useState('');
   const [modalSearch, setModalSearch] = useState('');
+
+  // Pagination State for Users View
+  const [userPage, setUserPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+  const [jumpPageInput, setJumpPageInput] = useState<string>('');
+
+  // Pagination State for Modal
+  const [modalUserPage, setModalUserPage] = useState<number>(1);
+  const [modalPageSize, setModalPageSize] = useState<number>(10);
+
+  // Copy Feedback State
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopyText = (text: string, keyId: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedKey(keyId);
+    setTimeout(() => {
+      setCopiedKey(null);
+    }, 2000);
+  };
 
   // 1. Initial Load & Realtime Subscriptions
   useEffect(() => {
@@ -141,6 +164,48 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     }
   };
 
+  // Delete User handler
+  const handleDeleteUser = async (u: AppUser) => {
+    if (u.telegramId === 1365018137) {
+      alert('Неможливо видалити головного адміністратора!');
+      return;
+    }
+    const displayName = u.firstName || (u.username ? `@${u.username}` : `ID ${u.telegramId || u.id}`);
+    if (!confirm(`Ви дійсно бажаєте видалити користувача "${displayName}" з бази даних?\nЦю дію неможливо скасувати.`)) {
+      return;
+    }
+    try {
+      await deleteUser(u.id);
+    } catch (err: any) {
+      alert('Помилка видалення: ' + err.message);
+    }
+  };
+
+  // Block / Unblock User handler
+  const handleToggleBlock = async (u: AppUser) => {
+    if (u.telegramId === 1365018137) {
+      alert('Неможливо заблокувати головного адміністратора!');
+      return;
+    }
+    const willBlock = !u.isBlocked;
+    let reason = 'Обмеження доступу за рішенням адміністрації';
+
+    if (willBlock) {
+      const inputReason = prompt(
+        `Вкажіть причину обмеження доступу для користувача ${u.firstName || u.username || u.id} (користувач побачить її у ввічливому повідомленні):`,
+        reason
+      );
+      if (inputReason === null) return; // User cancelled prompt
+      if (inputReason.trim()) reason = inputReason.trim();
+    }
+
+    try {
+      await toggleBlockUser(u.id, willBlock, reason);
+    } catch (err: any) {
+      alert('Помилка зміни статусу блокування: ' + err.message);
+    }
+  };
+
   // -------------------------------------------------------------
   // Dynamic Real Metrics Calculations
   // -------------------------------------------------------------
@@ -166,13 +231,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     });
   }, [users, now]);
 
-  // Total query count (from real queries collection or users total sum)
+  // Total query count
   const totalQueriesCount = useMemo(() => {
     if (queries.length > 0) return queries.length;
     return users.reduce((acc, u) => acc + (u.totalQueries || 0), 0);
   }, [queries, users]);
 
-  // Average response time from real queries
+  // Average response time
   const averageResponseTimeMs = useMemo(() => {
     if (queries.length === 0) return 2100;
     const total = queries.reduce((acc, q) => acc + (q.durationMs || 0), 0);
@@ -214,7 +279,6 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
         }
       });
 
-      // Baseline fallback smoothing for empty state
       return hours.map((hour, idx) => {
         const u = realUserCounts[idx] || (users.length > 0 ? 1 : 0);
         const q = realQueryCounts[idx] || Math.round(u * 2);
@@ -232,7 +296,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       queries.forEach(q => {
         const d = new Date(q.timestamp);
         if (now - d.getTime() <= 7 * oneDayMs) {
-          const dayIdx = (d.getDay() + 6) % 7; // Monday = 0
+          const dayIdx = (d.getDay() + 6) % 7;
           realQueryCounts[dayIdx] += 1;
         }
       });
@@ -256,7 +320,6 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
         };
       });
     } else {
-      // 30 Days view
       const points = [];
       for (let i = 28; i >= 0; i -= 4) {
         const targetDate = new Date(now - i * oneDayMs);
@@ -319,13 +382,60 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     return `${pathD} L ${last.x} ${groundY} L ${first.x} ${groundY} Z`;
   }, [pathD, points, chartHeight, paddingY]);
 
-  // Navigation Items
+  // -------------------------------------------------------------
+  // Filtered & Paginated Users for TAB 5
+  // -------------------------------------------------------------
+  const filteredUsers = useMemo(() => {
+    return users.filter(u => {
+      const str = `${u.firstName || ''} ${u.lastName || ''} ${u.username || ''} ${u.telegramId || ''} ${u.id}`.toLowerCase();
+      return str.includes(userSearch.toLowerCase());
+    });
+  }, [users, userSearch]);
+
+  const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
+  
+  // Safe page correction
+  const safeUserPage = Math.min(Math.max(1, userPage), totalUserPages);
+
+  const paginatedUsers = useMemo(() => {
+    const start = (safeUserPage - 1) * pageSize;
+    return filteredUsers.slice(start, start + pageSize);
+  }, [filteredUsers, safeUserPage, pageSize]);
+
+  // Reset to page 1 on search change
+  useEffect(() => {
+    setUserPage(1);
+  }, [userSearch, pageSize]);
+
+  // Helper to generate page buttons
+  const getPaginationRange = (current: number, total: number) => {
+    if (total <= 7) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+    const delta = 1;
+    const range: (number | string)[] = [];
+    const left = current - delta;
+    const right = current + delta;
+
+    range.push(1);
+    if (left > 2) range.push('...');
+
+    for (let i = Math.max(2, left); i <= Math.min(total - 1, right); i++) {
+      range.push(i);
+    }
+
+    if (right < total - 1) range.push('...');
+    range.push(total);
+
+    return range;
+  };
+
   const navItems = [
     { id: 'dashboard' as AdminTab, label: 'Дашборд', icon: LayoutDashboard, badge: null, desc: 'Жива статистика та аналітика' },
     { id: 'providers' as AdminTab, label: 'Постачальники', icon: Building2, badge: providers.length, desc: 'Бренди, кольори, лого' },
     { id: 'models' as AdminTab, label: 'ШІ Моделі', icon: Cpu, badge: models.length, desc: 'Каталог, API, RPG тарифи' },
     { id: 'api-keys' as AdminTab, label: 'API Ключі & Сервер', icon: Key, badge: null, desc: 'Master key, синхронізація' },
-    { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти та сесії' },
+    { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти, блокування, сторінки' },
   ];
 
   const currentTabTitle = navItems.find(n => n.id === activeTab)?.label || 'Дашборд';
@@ -369,7 +479,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
           <div className="flex items-center gap-1.5 bg-[#252421] border border-[#3A3834] px-2.5 py-1 rounded-full text-xs font-medium text-emerald-400">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="hidden xs:inline">Firebase Realtime</span>
+            <span className="hidden xs:inline">Firebase Live</span>
           </div>
 
           <button 
@@ -403,9 +513,17 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
           {/* Drawer Top / User Profile */}
           <div className="px-5 pb-5 pt-2 border-b border-[#2C2A26] flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-[#CC785C] text-white flex items-center justify-center font-bold text-lg shadow-md shrink-0">
-                {currentUser?.first_name ? currentUser.first_name.charAt(0).toUpperCase() : 'Є'}
-              </div>
+              {currentUser?.photo_url ? (
+                <img 
+                  src={currentUser.photo_url} 
+                  alt={currentUser.first_name || 'Admin'} 
+                  className="w-11 h-11 rounded-2xl object-cover border border-[#44413C] shadow-md shrink-0"
+                />
+              ) : (
+                <div className="w-11 h-11 rounded-2xl bg-[#CC785C] text-white flex items-center justify-center font-bold text-lg shadow-md shrink-0">
+                  {currentUser?.first_name ? currentUser.first_name.charAt(0).toUpperCase() : 'Є'}
+                </div>
+              )}
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
                   <Shield size={14} className="text-[#CC785C]" />
@@ -505,12 +623,12 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
           {activeTab === 'dashboard' && (
             <div className="space-y-6 animate-fadeIn">
               
-              {/* Banner with Live Indicator */}
+              {/* Banner */}
               <div className="bg-gradient-to-r from-[#2B231D] via-[#242320] to-[#1F1E1B] p-5 sm:p-6 rounded-3xl border border-[#44332A] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">
                 <div>
                   <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#CC785C] bg-[#3A2A22] px-2.5 py-0.5 rounded-full mb-2">
                     <Sparkles size={12} />
-                    <span>Жива аналітика з бази Firebase</span>
+                    <span>Жива аналітика та контроль доступу</span>
                   </div>
                   <h2 className="text-xl sm:text-2xl font-bold text-[#FAF8F5] tracking-tight">
                     Вітаємо, {currentUser?.first_name || 'Адмін'}!
@@ -533,9 +651,9 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
               {/* 4 Clickable Metric Cards Grid */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
                 
-                {/* 1. Total Users (Clickable -> 'all_users') */}
+                {/* 1. Total Users */}
                 <div 
-                  onClick={() => { setModalSearch(''); setDrillModal('all_users'); }}
+                  onClick={() => { setModalSearch(''); setModalUserPage(1); setDrillModal('all_users'); }}
                   className="bg-[#242320] p-4 sm:p-5 rounded-3xl border border-[#363430] hover:border-[#CC785C] cursor-pointer transition-all active:scale-98 flex flex-col justify-between group shadow-xs hover:shadow-md"
                   title="Натисніть для перегляду всіх користувачів"
                 >
@@ -559,9 +677,9 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   </div>
                 </div>
 
-                {/* 2. Active in 24h (Clickable -> 'active_today') */}
+                {/* 2. Active in 24h */}
                 <div 
-                  onClick={() => { setModalSearch(''); setDrillModal('active_today'); }}
+                  onClick={() => { setModalSearch(''); setModalUserPage(1); setDrillModal('active_today'); }}
                   className="bg-[#242320] p-4 sm:p-5 rounded-3xl border border-[#363430] hover:border-emerald-500 cursor-pointer transition-all active:scale-98 flex flex-col justify-between group shadow-xs hover:shadow-md"
                   title="Натисніть для списку активних користувачів за добу"
                 >
@@ -585,7 +703,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   </div>
                 </div>
 
-                {/* 3. AI Queries (Clickable -> 'queries_detail') */}
+                {/* 3. AI Queries */}
                 <div 
                   onClick={() => { setModalSearch(''); setDrillModal('queries_detail'); }}
                   className="bg-[#242320] p-4 sm:p-5 rounded-3xl border border-[#363430] hover:border-indigo-400 cursor-pointer transition-all active:scale-98 flex flex-col justify-between group shadow-xs hover:shadow-md"
@@ -610,7 +728,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   </div>
                 </div>
 
-                {/* 4. Models & Providers (Clickable -> 'models_overview') */}
+                {/* 4. Models & Providers */}
                 <div 
                   onClick={() => { setModalSearch(''); setDrillModal('models_overview'); }}
                   className="bg-[#242320] p-4 sm:p-5 rounded-3xl border border-[#363430] hover:border-amber-400 cursor-pointer transition-all active:scale-98 flex flex-col justify-between group shadow-xs hover:shadow-md"
@@ -637,7 +755,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
               </div>
 
-              {/* Interactive Activity Chart (Clickable Points) */}
+              {/* Interactive Activity Chart */}
               <div className="bg-[#242320] p-5 sm:p-6 rounded-3xl border border-[#363430]">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
                   <div>
@@ -730,7 +848,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       strokeLinejoin="round"
                     />
 
-                    {/* Interactive Points (Hover + Click) */}
+                    {/* Interactive Points */}
                     {points.map((pt, idx) => {
                       const isHovered = hoveredPoint?.label === pt.label;
                       return (
@@ -807,10 +925,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   )}
                 </div>
 
-                {/* Interactive Insights Footer */}
+                {/* Footer insights */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 pt-4 border-t border-[#302E2A]">
                   <div 
-                    onClick={() => { setModalSearch(''); setDrillModal('active_today'); }}
+                    onClick={() => { setModalSearch(''); setModalUserPage(1); setDrillModal('active_today'); }}
                     className="flex items-center gap-2.5 p-2 rounded-2xl hover:bg-[#1F1E1B] cursor-pointer transition-colors"
                   >
                     <div className="p-2 bg-[#1B1A17] text-[#CC785C] rounded-xl">
@@ -836,7 +954,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   </div>
 
                   <div 
-                    onClick={() => { setModalSearch(''); setDrillModal('all_users'); }}
+                    onClick={() => { setModalSearch(''); setModalUserPage(1); setDrillModal('all_users'); }}
                     className="flex items-center gap-2.5 p-2 rounded-2xl hover:bg-[#1F1E1B] cursor-pointer transition-colors"
                   >
                     <div className="p-2 bg-[#1B1A17] text-indigo-400 rounded-xl">
@@ -1319,21 +1437,43 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
             </div>
           )}
 
-          {/* TAB 5: USERS */}
+          {/* TAB 5: USERS (With Avatars, Delete, Block, Copy, and Numbered Pagination) */}
           {activeTab === 'users' && (
             <div className="space-y-6 animate-fadeIn">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#242320] p-5 rounded-3xl border border-[#363430]">
                 <div>
                   <h2 className="text-lg font-bold text-[#ECE8E1] flex items-center gap-2">
                     <Users size={20} className="text-[#CC785C]" />
-                    <span>Зареєстровані користувачі ({users.length})</span>
+                    <span>Користувачі ({users.length})</span>
                   </h2>
                   <p className="text-xs text-[#8E8B83] mt-0.5">
-                    Реальні користувачі, які запускали додаток через Telegram Mini App або браузер
+                    Керування доступом: блокування, видалення, копіювання контактів та швидка пагінація
                   </p>
+                </div>
+
+                {/* Per Page Selector */}
+                <div className="flex items-center gap-2 self-start sm:self-auto text-xs bg-[#1B1A17] p-1 rounded-xl border border-[#35332F]">
+                  <span className="text-[#8E8B83] px-2">Показувати по:</span>
+                  <button
+                    onClick={() => setPageSize(5)}
+                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
+                      pageSize === 5 ? 'bg-[#CC785C] text-white shadow-xs' : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                    }`}
+                  >
+                    5
+                  </button>
+                  <button
+                    onClick={() => setPageSize(10)}
+                    className={`px-2.5 py-1 rounded-lg font-semibold transition-all ${
+                      pageSize === 10 ? 'bg-[#CC785C] text-white shadow-xs' : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                    }`}
+                  >
+                    10
+                  </button>
                 </div>
               </div>
 
+              {/* Search Bar */}
               <div className="relative">
                 <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7E7B74]" />
                 <input 
@@ -1345,67 +1485,278 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                 />
               </div>
 
+              {/* Users List with Real Avatars, Actions & Copy */}
               <div className="space-y-3">
-                {users
-                  .filter(u => {
-                    const str = `${u.firstName || ''} ${u.lastName || ''} ${u.username || ''} ${u.telegramId || ''} ${u.id}`.toLowerCase();
-                    return str.includes(userSearch.toLowerCase());
-                  })
-                  .map(u => {
+                {paginatedUsers.length > 0 ? (
+                  paginatedUsers.map(u => {
                     const isAdminUser = u.telegramId === 1365018137;
                     const isOnline = u.lastActive && (now - new Date(u.lastActive).getTime() <= fifteenMinMs);
+                    const copyIdKey = `id_${u.id}`;
+                    const copyUserKey = `user_${u.id}`;
 
                     return (
                       <div 
                         key={u.id}
-                        className="bg-[#242320] p-4 rounded-2xl border border-[#363430] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        className={`p-4 sm:p-5 rounded-3xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                          u.isBlocked 
+                            ? 'bg-[#291F1E] border-red-900/40' 
+                            : 'bg-[#242320] border-[#363430] hover:border-[#4B4842]'
+                        }`}
                       >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="relative">
-                            <div className="w-11 h-11 rounded-full bg-[#CC785C] text-white flex items-center justify-center font-bold text-base shrink-0 shadow-sm">
-                              {u.firstName ? u.firstName.charAt(0).toUpperCase() : 'U'}
-                            </div>
-                            {isOnline && (
-                              <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#242320]" />
+                        {/* User Identity Info */}
+                        <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                          {/* Real Telegram Avatar or Fallback Letter */}
+                          <div className="relative shrink-0">
+                            {u.photoUrl ? (
+                              <img 
+                                src={u.photoUrl} 
+                                alt={u.firstName || 'User'} 
+                                className="w-12 h-12 rounded-2xl object-cover border border-[#44413C] shadow-sm"
+                                onError={(e) => {
+                                  // Fallback if image fails to load
+                                  (e.target as HTMLElement).style.display = 'none';
+                                }}
+                              />
+                            ) : null}
+                            {!u.photoUrl && (
+                              <div className="w-12 h-12 rounded-2xl bg-[#CC785C] text-white flex items-center justify-center font-bold text-lg shadow-sm">
+                                {u.firstName ? u.firstName.charAt(0).toUpperCase() : 'U'}
+                              </div>
                             )}
+
+                            {/* Status Indicator Dot */}
+                            {isOnline ? (
+                              <span 
+                                className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-[#242320] shadow-sm"
+                                title="Онлайн зараз" 
+                              />
+                            ) : u.isBlocked ? (
+                              <span 
+                                className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-red-500 border-2 border-[#242320] shadow-sm"
+                                title="Заблоковано" 
+                              />
+                            ) : null}
                           </div>
 
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-bold text-[#ECE8E1] text-sm truncate">
-                                {u.firstName} {u.lastName}
-                              </h4>
+                          {/* Text info and copy buttons */}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {/* Clickable Full Name to Copy */}
+                              <button
+                                onClick={() => handleCopyText(`${u.firstName || ''} ${u.lastName || ''}`.trim() || 'Користувач', `name_${u.id}`)}
+                                className="font-bold text-[#ECE8E1] text-base hover:text-[#CC785C] transition-colors truncate flex items-center gap-1.5 group"
+                                title="Натисніть щоб скопіювати ім'я"
+                              >
+                                <span>{u.firstName} {u.lastName}</span>
+                                {copiedKey === `name_${u.id}` ? (
+                                  <Check size={14} className="text-emerald-400" />
+                                ) : (
+                                  <Copy size={13} className="text-[#7E7B74] opacity-0 group-hover:opacity-100 transition-opacity" />
+                                )}
+                              </button>
+
                               {isAdminUser && (
                                 <span className="text-[10px] bg-[#3B2820] text-[#CC785C] font-semibold px-2 py-0.5 rounded-full border border-[#5A382A]">
                                   Admin
                                 </span>
                               )}
-                              {isOnline && (
+
+                              {u.isBlocked ? (
+                                <span className="text-[10px] bg-red-950/60 text-red-300 font-semibold px-2.5 py-0.5 rounded-full border border-red-800/60 flex items-center gap-1">
+                                  <Ban size={10} />
+                                  <span>Заблоковано</span>
+                                </span>
+                              ) : isOnline ? (
                                 <span className="text-[10px] bg-emerald-950/40 text-emerald-400 font-semibold px-2 py-0.5 rounded-full border border-emerald-800/40">
                                   Онлайн
                                 </span>
-                              )}
+                              ) : null}
                             </div>
-                            <div className="text-xs text-[#8E8B83] flex items-center gap-2 mt-0.5 font-mono">
-                              <span>{u.username ? `@${u.username}` : `ID: ${u.telegramId || u.id}`}</span>
+
+                            {/* Username & Telegram ID with One-click Copy */}
+                            <div className="flex flex-wrap items-center gap-2 mt-1 text-xs font-mono text-[#8E8B83]">
+                              {u.username && (
+                                <button
+                                  onClick={() => handleCopyText(`@${u.username}`, copyUserKey)}
+                                  className="hover:text-[#ECE8E1] hover:bg-[#1B1A17] px-1.5 py-0.5 rounded-md border border-transparent hover:border-[#35332F] transition-all flex items-center gap-1"
+                                  title="Скопіювати юзернейм"
+                                >
+                                  <span>@{u.username}</span>
+                                  {copiedKey === copyUserKey ? <Check size={12} className="text-emerald-400" /> : <Copy size={11} className="text-[#6E6B64]" />}
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => handleCopyText(String(u.telegramId || u.id), copyIdKey)}
+                                className="hover:text-[#ECE8E1] hover:bg-[#1B1A17] px-1.5 py-0.5 rounded-md border border-transparent hover:border-[#35332F] transition-all flex items-center gap-1"
+                                title="Скопіювати ID"
+                              >
+                                <span>ID: {u.telegramId || u.id}</span>
+                                {copiedKey === copyIdKey ? <Check size={12} className="text-emerald-400" /> : <Copy size={11} className="text-[#6E6B64]" />}
+                              </button>
+
                               <span>•</span>
                               <span className="text-[#6E6B64] capitalize">{u.platform || 'telegram'}</span>
                               <span>•</span>
-                              <span className="text-[#A09D95]">{u.totalQueries || 0} запитів</span>
+                              <span className="text-[#C5C2BA]">{u.totalQueries || 0} запитів</span>
                             </div>
+
+                            {u.isBlocked && u.blockedReason && (
+                              <div className="text-[11px] text-red-300 mt-1 italic">
+                                Причина: {u.blockedReason}
+                              </div>
+                            )}
                           </div>
                         </div>
 
-                        <div className="text-left sm:text-right text-xs text-[#8E8B83] shrink-0 font-mono">
-                          <div className="text-[#C5C2BA]">Остання активність:</div>
-                          <div className="text-[11px] text-[#8E8B83]">
-                            {u.lastActive ? new Date(u.lastActive).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Невідомо'}
-                          </div>
+                        {/* Action Buttons: Block/Unblock & Delete */}
+                        <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
+                          
+                          {/* Block/Unblock Button */}
+                          {!isAdminUser && (
+                            <button
+                              onClick={() => handleToggleBlock(u)}
+                              className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs active:scale-95 border ${
+                                u.isBlocked
+                                  ? 'bg-[#1F2E24] hover:bg-[#273B2E] text-emerald-300 border-emerald-800/40'
+                                  : 'bg-[#2E1E1C] hover:bg-[#3B2522] text-red-300 border-red-900/40'
+                              }`}
+                              title={u.isBlocked ? 'Розблокувати доступ' : 'Заблокувати доступ'}
+                            >
+                              {u.isBlocked ? (
+                                <>
+                                  <Unlock size={14} className="text-emerald-400" />
+                                  <span>Розблокувати</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Ban size={14} className="text-red-400" />
+                                  <span>Заблокувати</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+
+                          {/* Delete from DB Button */}
+                          {!isAdminUser && (
+                            <button
+                              onClick={() => handleDeleteUser(u)}
+                              className="p-2 text-[#8E8B83] hover:text-red-400 hover:bg-red-950/20 rounded-xl border border-transparent hover:border-red-900/30 transition-colors"
+                              title="Видалити з бази"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+
                         </div>
                       </div>
                     );
-                  })}
+                  })
+                ) : (
+                  <div className="p-8 text-center text-xs text-[#8E8B83] bg-[#242320] rounded-3xl border border-[#363430]">
+                    Користувачів не знайдено за заданим фільтром.
+                  </div>
+                )}
               </div>
+
+              {/* Numbered Pagination Controls */}
+              {totalUserPages > 1 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-[#302E2A]">
+                  <div className="text-xs text-[#8E8B83]">
+                    Показано <strong className="text-[#ECE8E1]">{(safeUserPage - 1) * pageSize + 1}</strong>–<strong className="text-[#ECE8E1]">{Math.min(safeUserPage * pageSize, filteredUsers.length)}</strong> із <strong className="text-[#ECE8E1]">{filteredUsers.length}</strong> користувачів
+                  </div>
+
+                  <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                    {/* First & Prev */}
+                    <button
+                      onClick={() => setUserPage(1)}
+                      disabled={safeUserPage === 1}
+                      className="p-1.5 rounded-lg text-xs bg-[#1F1E1B] border border-[#35332F] text-[#8E8B83] hover:text-[#ECE8E1] disabled:opacity-40 transition-colors"
+                      title="Перша сторінка"
+                    >
+                      <ChevronsLeft size={16} />
+                    </button>
+                    <button
+                      onClick={() => setUserPage(p => Math.max(1, p - 1))}
+                      disabled={safeUserPage === 1}
+                      className="p-1.5 rounded-lg text-xs bg-[#1F1E1B] border border-[#35332F] text-[#8E8B83] hover:text-[#ECE8E1] disabled:opacity-40 transition-colors"
+                      title="Попередня"
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+
+                    {/* Numbered Page Buttons: 1, 2, 3, 4, 5... */}
+                    {getPaginationRange(safeUserPage, totalUserPages).map((item, idx) => {
+                      if (item === '...') {
+                        return <span key={idx} className="px-1.5 text-xs text-[#6E6B64]">...</span>;
+                      }
+                      const pageNum = Number(item);
+                      const isCur = pageNum === safeUserPage;
+                      return (
+                        <button
+                          key={idx}
+                          onClick={() => setUserPage(pageNum)}
+                          className={`min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold transition-all ${
+                            isCur 
+                              ? 'bg-[#CC785C] text-white shadow-xs' 
+                              : 'bg-[#1F1E1B] border border-[#35332F] text-[#8E8B83] hover:text-[#ECE8E1] hover:border-[#4B4842]'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+
+                    {/* Next & Last */}
+                    <button
+                      onClick={() => setUserPage(p => Math.min(totalUserPages, p + 1))}
+                      disabled={safeUserPage === totalUserPages}
+                      className="p-1.5 rounded-lg text-xs bg-[#1F1E1B] border border-[#35332F] text-[#8E8B83] hover:text-[#ECE8E1] disabled:opacity-40 transition-colors"
+                      title="Наступна"
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                    <button
+                      onClick={() => setUserPage(totalUserPages)}
+                      disabled={safeUserPage === totalUserPages}
+                      className="p-1.5 rounded-lg text-xs bg-[#1F1E1B] border border-[#35332F] text-[#8E8B83] hover:text-[#ECE8E1] disabled:opacity-40 transition-colors"
+                      title="Остання сторінка"
+                    >
+                      <ChevronsRight size={16} />
+                    </button>
+
+                    {/* Direct Page Jump Input */}
+                    <form 
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const p = parseInt(jumpPageInput);
+                        if (!isNaN(p) && p >= 1 && p <= totalUserPages) {
+                          setUserPage(p);
+                          setJumpPageInput('');
+                        }
+                      }}
+                      className="flex items-center gap-1 ml-2"
+                    >
+                      <input 
+                        type="number"
+                        min="1"
+                        max={totalUserPages}
+                        value={jumpPageInput}
+                        onChange={(e) => setJumpPageInput(e.target.value)}
+                        placeholder="Стор."
+                        className="w-14 px-2 py-1 bg-[#1B1A17] border border-[#35332F] rounded-lg text-xs text-center text-[#ECE8E1] focus:outline-none focus:border-[#CC785C]"
+                      />
+                      <button
+                        type="submit"
+                        className="px-2 py-1 bg-[#2D2B27] hover:bg-[#383631] text-[#ECE8E1] rounded-lg text-xs font-medium border border-[#383632] transition-colors"
+                      >
+                        Перейти
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+
             </div>
           )}
 
@@ -1445,43 +1796,130 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto py-4 space-y-3">
               
-              {/* MODAL 1: ALL USERS */}
-              {drillModal === 'all_users' && (
-                <div className="space-y-3">
-                  <div className="relative">
-                    <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7E7B74]" />
-                    <input 
-                      type="text"
-                      placeholder="Фільтр за ім'ям, ID або нікнеймом..."
-                      value={modalSearch}
-                      onChange={e => setModalSearch(e.target.value)}
-                      className="w-full pl-9 pr-4 py-2 bg-[#1B1A17] border border-[#35332F] rounded-xl text-xs text-[#ECE8E1] focus:outline-none focus:border-[#CC785C]"
-                    />
-                  </div>
+              {/* MODAL 1: ALL USERS (With Avatars, Delete, Block, Copy, and Numbered Pagination) */}
+              {drillModal === 'all_users' && (() => {
+                const modalFiltered = users.filter(u => 
+                  `${u.firstName || ''} ${u.username || ''} ${u.telegramId || ''}`.toLowerCase().includes(modalSearch.toLowerCase())
+                );
+                const modalTotalPages = Math.max(1, Math.ceil(modalFiltered.length / modalPageSize));
+                const safeModalPage = Math.min(Math.max(1, modalUserPage), modalTotalPages);
+                const modalSlice = modalFiltered.slice((safeModalPage - 1) * modalPageSize, safeModalPage * modalPageSize);
 
-                  <div className="space-y-2">
-                    {users
-                      .filter(u => `${u.firstName || ''} ${u.username || ''} ${u.telegramId || ''}`.toLowerCase().includes(modalSearch.toLowerCase()))
-                      .map(u => (
-                        <div key={u.id} className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-xl flex items-center justify-between text-xs">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full bg-[#CC785C] text-white flex items-center justify-center font-bold text-xs">
-                              {u.firstName ? u.firstName.charAt(0) : 'U'}
+                return (
+                  <div className="space-y-3">
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7E7B74]" />
+                        <input 
+                          type="text"
+                          placeholder="Фільтр за ім'ям, ID або нікнеймом..."
+                          value={modalSearch}
+                          onChange={e => { setModalSearch(e.target.value); setModalUserPage(1); }}
+                          className="w-full pl-9 pr-4 py-2 bg-[#1B1A17] border border-[#35332F] rounded-xl text-xs text-[#ECE8E1] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1 text-xs bg-[#1B1A17] px-2 rounded-xl border border-[#35332F]">
+                        <button
+                          onClick={() => setModalPageSize(5)}
+                          className={`px-2 py-1 rounded-lg ${modalPageSize === 5 ? 'bg-[#CC785C] text-white font-bold' : 'text-[#8E8B83]'}`}
+                        >
+                          5
+                        </button>
+                        <button
+                          onClick={() => setModalPageSize(10)}
+                          className={`px-2 py-1 rounded-lg ${modalPageSize === 10 ? 'bg-[#CC785C] text-white font-bold' : 'text-[#8E8B83]'}`}
+                        >
+                          10
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {modalSlice.map(u => {
+                        const isAdminUser = u.telegramId === 1365018137;
+                        return (
+                          <div key={u.id} className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-2xl flex items-center justify-between text-xs gap-3">
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              {u.photoUrl ? (
+                                <img src={u.photoUrl} alt={u.firstName || 'User'} className="w-9 h-9 rounded-xl object-cover shrink-0" />
+                              ) : (
+                                <div className="w-9 h-9 rounded-xl bg-[#CC785C] text-white flex items-center justify-center font-bold text-xs shrink-0">
+                                  {u.firstName ? u.firstName.charAt(0) : 'U'}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <div className="font-bold text-[#ECE8E1] truncate flex items-center gap-1.5">
+                                  <span>{u.firstName} {u.lastName}</span>
+                                  {u.isBlocked && <span className="text-[9px] text-red-400 bg-red-950/40 px-1.5 py-0.2 rounded border border-red-800/40">Заблоковано</span>}
+                                </div>
+                                <div className="text-[10px] text-[#8E8B83] font-mono flex items-center gap-2">
+                                  <span>{u.username ? `@${u.username}` : `ID: ${u.telegramId || u.id}`}</span>
+                                  <span>•</span>
+                                  <span>{u.totalQueries || 0} зап.</span>
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                              <div className="font-bold text-[#ECE8E1]">{u.firstName} {u.lastName}</div>
-                              <div className="text-[10px] text-[#8E8B83] font-mono">{u.username ? `@${u.username}` : `ID: ${u.telegramId || u.id}`}</div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                onClick={() => handleCopyText(`@${u.username || u.telegramId || u.id}`, `modal_copy_${u.id}`)}
+                                className="p-1.5 text-[#8E8B83] hover:text-[#ECE8E1] hover:bg-[#252421] rounded-lg transition-colors"
+                                title="Скопіювати"
+                              >
+                                {copiedKey === `modal_copy_${u.id}` ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                              </button>
+
+                              {!isAdminUser && (
+                                <button
+                                  onClick={() => handleToggleBlock(u)}
+                                  className={`p-1.5 rounded-lg text-xs font-semibold ${
+                                    u.isBlocked ? 'text-emerald-400 hover:bg-emerald-950/30' : 'text-red-400 hover:bg-red-950/30'
+                                  }`}
+                                  title={u.isBlocked ? 'Розблокувати' : 'Заблокувати'}
+                                >
+                                  {u.isBlocked ? <Unlock size={14} /> : <Ban size={14} />}
+                                </button>
+                              )}
+
+                              {!isAdminUser && (
+                                <button
+                                  onClick={() => handleDeleteUser(u)}
+                                  className="p-1.5 text-[#8E8B83] hover:text-red-400 hover:bg-red-950/20 rounded-lg transition-colors"
+                                  title="Видалити з бази"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
                             </div>
                           </div>
-                          <div className="text-right font-mono text-[11px] text-[#A09D95]">
-                            <div>{u.totalQueries || 0} запитів</div>
-                            <div className="text-[10px] text-[#6E6B64]">{u.lastActive ? new Date(u.lastActive).toLocaleDateString() : '—'}</div>
-                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {modalTotalPages > 1 && (
+                      <div className="flex items-center justify-between text-xs pt-2 border-t border-[#2E2C28]">
+                        <span className="text-[#8E8B83]">Стор. {safeModalPage} з {modalTotalPages}</span>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => setModalUserPage(p => Math.max(1, p - 1))}
+                            disabled={safeModalPage === 1}
+                            className="px-2 py-1 bg-[#1B1A17] border border-[#35332F] rounded-lg disabled:opacity-40"
+                          >
+                            ‹
+                          </button>
+                          <button
+                            onClick={() => setModalUserPage(p => Math.min(modalTotalPages, p + 1))}
+                            disabled={safeModalPage === modalTotalPages}
+                            className="px-2 py-1 bg-[#1B1A17] border border-[#35332F] rounded-lg disabled:opacity-40"
+                          >
+                            ›
+                          </button>
                         </div>
-                      ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* MODAL 2: ACTIVE TODAY */}
               {drillModal === 'active_today' && (
@@ -1495,9 +1933,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     {active24hUsers.map(u => (
                       <div key={u.id} className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-xl flex items-center justify-between text-xs">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-full bg-[#20362B] text-emerald-400 flex items-center justify-center font-bold text-xs border border-emerald-700/30">
-                            {u.firstName ? u.firstName.charAt(0) : 'A'}
-                          </div>
+                          {u.photoUrl ? (
+                            <img src={u.photoUrl} alt={u.firstName || 'User'} className="w-8 h-8 rounded-full object-cover" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-[#20362B] text-emerald-400 flex items-center justify-center font-bold text-xs border border-emerald-700/30">
+                              {u.firstName ? u.firstName.charAt(0) : 'A'}
+                            </div>
+                          )}
                           <div>
                             <div className="font-bold text-[#ECE8E1] flex items-center gap-1.5">
                               <span>{u.firstName} {u.lastName}</span>
