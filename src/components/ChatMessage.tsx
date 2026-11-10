@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw } from 'lucide-react';
+import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Message } from '../lib/api';
 import { MarkdownContent } from './MarkdownContent';
 
@@ -65,6 +65,41 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
           >
             {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  const isError = message.role === 'model' && (message.text.startsWith('Помилка:') || message.text.startsWith('Error:'));
+
+  if (isError) {
+    const errorText = message.text.replace(/^(Помилка:|Error:)\s*/, '');
+    return (
+      <div className="flex flex-col w-full mb-6 animate-in fade-in duration-200">
+        <div className="p-4 rounded-2xl bg-[#26211C] border border-[#523326] text-[#EDE9DF] shadow-md max-w-2xl">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-[#36261D] text-[#CC785C] shrink-0 mt-0.5">
+              <AlertTriangle size={18} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="font-medium text-sm text-[#F0ECE1] mb-1">
+                Сервер моделі тимчасово зайнятий
+              </h4>
+              <p className="text-[13.5px] leading-relaxed text-[#C5B8A8] mb-3 select-text">
+                {errorText}
+              </p>
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#CC785C] hover:bg-[#D97757] text-white text-xs font-medium transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <RotateCcw size={14} />
+                  Повторити запит
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );

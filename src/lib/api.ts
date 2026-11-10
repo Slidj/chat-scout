@@ -67,6 +67,88 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
  * Streams chat completion in real-time (stream: true) via SSE
  * providing instant Time-to-First-Token and smooth live text rendering.
  */
+/**
+ * Sanitizes conversation history for strict LLM providers (Google AI Studio, Claude).
+ * - Strips error messages so failed requests don't poison subsequent prompts
+ * - Removes empty messages
+ * - Enforces strict alternation (merges consecutive user or assistant messages)
+ * - Limits context length to avoid token overflow
+ */
+export function sanitizeConversationHistory(history: Message[], currentPrompt: string) {
+  const sanitized: { role: 'user' | 'assistant'; content: string }[] = [];
+
+  for (const msg of history) {
+    const text = (msg.text || '').trim();
+    // Exclude empty messages and error messages
+    if (!text || text.startsWith('Помилка:') || text.startsWith('Error:') || text.includes('Provider returned error')) {
+      continue;
+    }
+
+    const role = msg.role === 'model' ? 'assistant' : 'user';
+
+    // Merge consecutive messages of the same role (required by Google AI Studio)
+    if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === role) {
+      sanitized[sanitized.length - 1].content += '\n\n' + text;
+    } else {
+      sanitized.push({ role, content: text });
+    }
+  }
+
+  const cleanPrompt = currentPrompt.trim();
+  if (cleanPrompt) {
+    if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === 'user') {
+      sanitized[sanitized.length - 1].content += '\n\n' + cleanPrompt;
+    } else {
+      sanitized.push({ role: 'user', content: cleanPrompt });
+    }
+  }
+
+  // Ensure history starts with user message
+  while (sanitized.length > 0 && sanitized[0].role !== 'user') {
+    sanitized.shift();
+  }
+
+  // Keep last 14 turns
+  const trimmed = sanitized.slice(-14);
+  if (trimmed.length > 0 && trimmed[0].role !== 'user') {
+    trimmed.shift();
+  }
+
+  return trimmed;
+}
+
+/**
+ * Transforms cryptic JSON/upstream rate-limit errors into clear Ukrainian messages
+ */
+export function formatApiError(rawError: any): string {
+  if (!rawError) return 'Невідома помилка підключення до моделі';
+  
+  const str = typeof rawError === 'string' ? rawError : JSON.stringify(rawError);
+
+  if (str.includes('rate-limited') || str.includes('429')) {
+    return 'Модель тимчасово перевантажена запитами на стороні Google AI Studio / OpenRouter (ліміт запитів). Зачекайте 10–20 секунд і спробуйте знову, або перемкніться на іншу доступну модель.';
+  }
+  if (str.includes('Internal error encountered') || str.includes('INTERNAL') || str.includes('"code": 500')) {
+    return 'Сервер моделі тимчасово повернув помилку перевантаження (Google AI Studio 500). Спробуйте повторити запит або обрати іншу модель зі списку.';
+  }
+  if (str.includes('401') || str.includes('Invalid token')) {
+    return 'Невірний API ключ або токен доступу. Перевірте налаштування ключа.';
+  }
+  if (str.includes('402')) {
+    return 'Недостатньо коштів на балансі API ключа.';
+  }
+
+  if (typeof rawError === 'object') {
+    return rawError?.error?.message || rawError?.message || str.slice(0, 200);
+  }
+
+  return str.slice(0, 250);
+}
+
+/**
+ * Streams chat completion in real-time (stream: true) via SSE
+ * with automatic retry on transient 500/429 spikes and clean history sanitization.
+ */
 export async function streamChatResponse(
   apiKey: string,
   modelId: string,
@@ -75,139 +157,150 @@ export async function streamChatResponse(
   onChunk: (chunk: string, accumulatedText: string) => void,
   signal?: AbortSignal
 ): Promise<string> {
-  const messages = history.map(msg => ({
-    role: msg.role === 'model' ? 'assistant' : 'user',
-    content: msg.text
-  }));
-  messages.push({ role: 'user', content: prompt });
+  const sanitizedMessages = sanitizeConversationHistory(history, prompt);
 
-  let lastError = null;
+  const MAX_RETRIES = 2;
+  let lastError: any = null;
 
-  for (const baseUrl of BASE_URLS) {
-    try {
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'X-Accel-Buffering': 'no'
-        },
-        body: JSON.stringify({
-          model: modelId,
-          messages: messages,
-          stream: true
-        }),
-        signal
-      });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      if (signal?.aborted) throw new Error("Запит скасовано");
+      // Backoff delay: 1.2s on first retry, 2.5s on second retry
+      const delayMs = attempt * 1250;
+      await new Promise(r => setTimeout(r, delayMs));
+    }
 
-      if (response.status === 401) {
-        throw new Error("Невірний API ключ (помилка 401). Перевірте налаштування.");
-      }
-      if (response.status === 402) {
-        throw new Error("Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.");
-      }
-      if (!response.ok) {
-        let errMsg = '';
-        try {
-          const errData = await response.json();
-          errMsg = errData?.error?.message || errData?.message || '';
-        } catch {
-          errMsg = await response.text();
+    for (const baseUrl of BASE_URLS) {
+      try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages: sanitizedMessages,
+            stream: true
+          }),
+          signal
+        });
+
+        if (response.status === 401) {
+          throw new Error("Невірний API ключ (помилка 401). Перевірте налаштування.");
         }
-        throw new Error(errMsg || `HTTP помилка ${response.status} від ${baseUrl}`);
-      }
+        if (response.status === 402) {
+          throw new Error("Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.");
+        }
+        if (!response.ok) {
+          let errData: any = null;
+          try {
+            errData = await response.json();
+          } catch {
+            errData = await response.text();
+          }
+          const formattedMsg = formatApiError(errData);
+          const err = new Error(formattedMsg);
+          (err as any).statusCode = response.status;
+          throw err;
+        }
 
-      if (!response.body) {
-        throw new Error("Тіло відповіді порожнє");
-      }
+        if (!response.body) {
+          throw new Error("Тіло відповіді порожнє");
+        }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let accumulatedText = '';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let accumulatedText = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // save incomplete fragment
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // save incomplete fragment
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith(':')) continue;
-          if (trimmed === 'data: [DONE]') continue;
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(':')) continue;
+            if (trimmed === 'data: [DONE]') continue;
 
-          if (trimmed.startsWith('data: ')) {
-            const jsonStr = trimmed.slice(6);
-            try {
-              const parsed = JSON.parse(jsonStr);
-              if (parsed.error) {
-                throw new Error(parsed.error.message || 'Помилка провайдера ШІ');
-              }
-              const delta = parsed.choices?.[0]?.delta;
-              let deltaContent = '';
-              if (typeof delta?.content === 'string') {
-                deltaContent = delta.content;
-              } else if (Array.isArray(delta?.content)) {
-                deltaContent = delta.content.map((c: any) => (typeof c === 'string' ? c : c?.text || '')).join('');
-              } else if (typeof parsed.choices?.[0]?.text === 'string') {
-                deltaContent = parsed.choices[0].text;
-              } else if (typeof parsed.choices?.[0]?.message?.content === 'string') {
-                deltaContent = parsed.choices[0].message.content;
-              }
+            if (trimmed.startsWith('data: ')) {
+              const jsonStr = trimmed.slice(6);
+              try {
+                const parsed = JSON.parse(jsonStr);
+                if (parsed.error) {
+                  throw new Error(formatApiError(parsed.error));
+                }
+                const delta = parsed.choices?.[0]?.delta;
+                let deltaContent = '';
+                if (typeof delta?.content === 'string') {
+                  deltaContent = delta.content;
+                } else if (Array.isArray(delta?.content)) {
+                  deltaContent = delta.content.map((c: any) => (typeof c === 'string' ? c : c?.text || '')).join('');
+                } else if (typeof parsed.choices?.[0]?.text === 'string') {
+                  deltaContent = parsed.choices[0].text;
+                } else if (typeof parsed.choices?.[0]?.message?.content === 'string') {
+                  deltaContent = parsed.choices[0].message.content;
+                }
 
-              if (deltaContent) {
-                accumulatedText += deltaContent;
-                onChunk(deltaContent, accumulatedText);
-              }
-            } catch (err: any) {
-              if (err.message && !err.message.includes('JSON')) {
-                throw err;
+                if (deltaContent) {
+                  accumulatedText += deltaContent;
+                  onChunk(deltaContent, accumulatedText);
+                }
+              } catch (err: any) {
+                if (err.message && !err.message.includes('JSON')) {
+                  throw err;
+                }
               }
             }
           }
         }
-      }
 
-      // Trailing chunk check
-      if (buffer.trim().startsWith('data: ') && buffer.trim() !== 'data: [DONE]') {
-        try {
-          const parsed = JSON.parse(buffer.trim().slice(6));
-          const delta = parsed.choices?.[0]?.delta;
-          const deltaContent = typeof delta?.content === 'string' ? delta.content : (parsed.choices?.[0]?.text || '');
-          if (deltaContent) {
-            accumulatedText += deltaContent;
-            onChunk(deltaContent, accumulatedText);
-          }
-        } catch (e) {}
-      }
+        // Trailing chunk check
+        if (buffer.trim().startsWith('data: ') && buffer.trim() !== 'data: [DONE]') {
+          try {
+            const parsed = JSON.parse(buffer.trim().slice(6));
+            const delta = parsed.choices?.[0]?.delta;
+            const deltaContent = typeof delta?.content === 'string' ? delta.content : (parsed.choices?.[0]?.text || '');
+            if (deltaContent) {
+              accumulatedText += deltaContent;
+              onChunk(deltaContent, accumulatedText);
+            }
+          } catch (e) {}
+        }
 
-      if (accumulatedText.length > 0) {
-        return accumulatedText;
-      }
+        if (accumulatedText.length > 0) {
+          return accumulatedText;
+        }
 
-      throw new Error("Отримано порожній потік тексту від моделі");
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        throw err;
-      }
-      console.warn(`Стрімінг не вдався для ${baseUrl}, пробуємо наступний сервер...`, err);
-      lastError = err;
-      if (err.message && (err.message.includes("401") || err.message.includes("402") || err.message.includes("rate-limited"))) {
-        throw err;
+        throw new Error("Отримано порожній потік тексту від моделі");
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          throw err;
+        }
+        lastError = err;
+        if (err.message && (err.message.includes("401") || err.message.includes("402"))) {
+          throw err;
+        }
+        console.warn(`Спроба ${attempt + 1} не вдалася для ${baseUrl}:`, err.message);
       }
     }
   }
 
-  // Fallback to non-streaming only if SSE connection was rejected
-  console.warn("Стрімінг не спрацював, викликаємо fallback non-streaming режим...");
-  const nonStreamResult = await generateChatResponse(apiKey, modelId, prompt, history);
-  onChunk(nonStreamResult, nonStreamResult);
-  return nonStreamResult;
+  // Graceful fallback attempt with non-streaming
+  try {
+    const nonStreamResult = await generateChatResponse(apiKey, modelId, prompt, history);
+    onChunk(nonStreamResult, nonStreamResult);
+    return nonStreamResult;
+  } catch (fallbackErr: any) {
+    throw lastError || fallbackErr;
+  }
 }
 
 /**
@@ -219,11 +312,7 @@ export async function generateChatResponse(
   prompt: string,
   history: Message[]
 ): Promise<string> {
-  const messages = history.map(msg => ({
-    role: msg.role === 'model' ? 'assistant' : 'user',
-    content: msg.text
-  }));
-  messages.push({ role: 'user', content: prompt });
+  const sanitizedMessages = sanitizeConversationHistory(history, prompt);
 
   const data = await fetchWithFallback('/chat/completions', {
     method: 'POST',
@@ -233,7 +322,7 @@ export async function generateChatResponse(
     },
     body: JSON.stringify({
       model: modelId,
-      messages: messages,
+      messages: sanitizedMessages,
       stream: false
     })
   });
