@@ -8,7 +8,7 @@ import { ChatPanel } from './components/ChatPanel';
 import { AdminPanel } from './components/AdminPanel';
 import { Provider, AiModel } from './types';
 import { fetchModels, Model } from './lib/api';
-import { getProviders, getModels } from './lib/db';
+import { getProviders, getModels, trackUserSession } from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
 declare global {
@@ -93,6 +93,7 @@ export default function App() {
       const telegramUser = window.Telegram.WebApp.initDataUnsafe?.user;
       if (telegramUser) {
         setTgUser(telegramUser);
+        trackUserSession(telegramUser);
         if (telegramUser.id === ADMIN_TELEGRAM_ID) {
           isUserAdmin = true;
         }
@@ -685,6 +686,7 @@ export default function App() {
             loadData();
           }} 
           apiModels={apiModels}
+          currentUser={tgUser}
         />
       )}
     </div>
