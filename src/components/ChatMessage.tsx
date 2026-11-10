@@ -71,7 +71,14 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
         className={`pr-2 pl-0.5 ${isTyping ? 'cursor-pointer' : ''}`}
         title={isTyping ? "Натисніть щоб показати текст одразу" : undefined}
       >
-        <MarkdownContent content={message.text} isTyping={isTyping} />
+        {message.text === '' && isTyping ? (
+          <div className="flex items-center gap-2.5 py-1 text-[#9E9A92] text-sm select-none animate-pulse">
+            <span className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
+            <span className="font-serif italic text-[#C5C2BA]">Міркує...</span>
+          </div>
+        ) : (
+          <MarkdownContent content={message.text} isTyping={isTyping} />
+        )}
       </div>
 
       {/* Claude action icons bar - only shown when typing finishes */}

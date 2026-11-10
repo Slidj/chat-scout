@@ -2,9 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
-  Check
+  Check, Square
 } from 'lucide-react';
-import { Message, generateChatResponse } from '../lib/api';
+import { Message, streamChatResponse, generateChatResponse } from '../lib/api';
 import { ChatMessage } from './ChatMessage';
 import { getTierClasses, getTierTextColor, resolveColorToHex } from '../lib/utils';
 import { logQueryEvent, getOrInitClientId } from '../lib/db';
@@ -38,10 +38,9 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [isAddSheetOpen, setIsAddSheetOpen] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   
-  // Client-side typewriter animation state
+  // Streaming & Generation state
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
-  const typingTimerRef = useRef<number | null>(null);
-  const fullTextMapRef = useRef<Record<string, string>>({});
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Toggles for "Add to chat" sheet
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
@@ -82,74 +81,34 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     }
   }, [messages, isLoading, isOpen, typingMessageId]);
 
-  // Clean up any running typing timers on unmount
+  // Clean up any running stream on unmount
   useEffect(() => {
     return () => {
-      if (typingTimerRef.current) {
-        clearInterval(typingTimerRef.current);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
     };
   }, []);
 
   /**
-   * Animates text output on client side progressively without server stream
+   * Stops ongoing generation immediately
    */
-  const animateTextReveal = (messageId: string, fullText: string) => {
-    fullTextMapRef.current[messageId] = fullText;
-    setTypingMessageId(messageId);
-
-    if (typingTimerRef.current) {
-      clearInterval(typingTimerRef.current);
-      typingTimerRef.current = null;
+  const handleStopGenerating = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
-
-    // Adaptive speed calculation
-    const totalChars = fullText.length;
-    // Aim for smooth 1.2 to 3.2 seconds total duration
-    const targetDurationMs = Math.min(Math.max(totalChars * 12, 1000), 3200);
-    const intervalMs = 24; // ~40 updates per second
-    const totalSteps = targetDurationMs / intervalMs;
-    const charsPerStep = Math.max(1, Math.ceil(totalChars / totalSteps));
-
-    let currentLength = 0;
-
-    typingTimerRef.current = window.setInterval(() => {
-      currentLength += charsPerStep;
-
-      if (currentLength >= totalChars) {
-        currentLength = totalChars;
-        if (typingTimerRef.current) {
-          clearInterval(typingTimerRef.current);
-          typingTimerRef.current = null;
-        }
-        setTypingMessageId(null);
-      }
-
-      const chunk = fullText.slice(0, currentLength);
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: chunk } : m));
-    }, intervalMs);
-  };
-
-  /**
-   * Skips typing animation and reveals entire text immediately
-   */
-  const handleSkipTyping = () => {
-    if (typingMessageId && typingTimerRef.current) {
-      clearInterval(typingTimerRef.current);
-      typingTimerRef.current = null;
-      const fullText = fullTextMapRef.current[typingMessageId];
-      if (fullText) {
-        setMessages(prev => prev.map(m => m.id === typingMessageId ? { ...m, text: fullText } : m));
-      }
-      setTypingMessageId(null);
-    }
+    setIsLoading(false);
+    setTypingMessageId(null);
   };
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || !apiKey || !selectedModel || isLoading) return;
 
-    // If previous message was still typing, finish it immediately
-    handleSkipTyping();
+    // Abort any previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
 
     const userText = inputValue.trim();
     const newUserMessage: Message = {
@@ -158,19 +117,44 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       text: userText,
     };
 
-    const updatedHistory = [...messages, newUserMessage];
-    setMessages(updatedHistory);
+    const newHistory = [...messages, newUserMessage];
+    setMessages(newHistory);
     setInputValue('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    setIsLoading(true);
 
+    const newModelId = (Date.now() + 1).toString();
+    const placeholderModelMessage: Message = {
+      id: newModelId,
+      role: 'model',
+      text: '',
+    };
+
+    // Immediately show placeholder with Claude "Міркує..." indicator
+    setMessages(prev => [...prev, placeholderModelMessage]);
+    setIsLoading(true);
+    setTypingMessageId(newModelId);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
     const startTime = Date.now();
+
     try {
-      // 1. Fetch full non-streamed response from API (saves server resources on free tier)
-      const responseText = await generateChatResponse(apiKey, selectedModel, userText, messages);
+      // Real-time token streaming with zero perceived delay
+      await streamChatResponse(
+        apiKey,
+        selectedModel,
+        userText,
+        newHistory.slice(0, -1),
+        (_chunk, accumulated) => {
+          setMessages(prev =>
+            prev.map(m => m.id === newModelId ? { ...m, text: accumulated } : m)
+          );
+          scrollToBottom(false);
+        },
+        abortController.signal
+      );
+
       const durationMs = Date.now() - startTime;
-      
-      // Log real query to Firestore
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
@@ -179,23 +163,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         durationMs,
         status: 'success'
       });
-
-      const newModelId = (Date.now() + 1).toString();
-      const placeholderModelMessage: Message = {
-        id: newModelId,
-        role: 'model',
-        text: '',
-      };
-      
-      // Stop loading state
-      setIsLoading(false);
-
-      // Add empty message container
-      setMessages(prev => [...prev, placeholderModelMessage]);
-
-      // 2. Beautiful client-side typewriter animation
-      animateTextReveal(newModelId, responseText);
     } catch (error: any) {
+      if (error.name === 'AbortError') {
+        // Generation cancelled by user, keep whatever text was generated
+        return;
+      }
       console.error(error);
       const durationMs = Date.now() - startTime;
       
@@ -209,13 +181,21 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         errorMessage: error.message
       });
 
+      setMessages(prev =>
+        prev.map(m => m.id === newModelId
+          ? { 
+              ...m, 
+              text: m.text 
+                ? `${m.text}\n\n*(Зв'язок перервано: ${error.message || 'помилка'}*` 
+                : `Помилка: ${error.message || 'Щось пішло не так при зверненні до API. Перевірте з\'єднання.'}` 
+            }
+          : m
+        )
+      );
+    } finally {
       setIsLoading(false);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'model',
-        text: `Помилка: ${error.message || 'Щось пішло не так при зверненні до API. Перевірте ваш ключ та з\'єднання.'}`,
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      setTypingMessageId(null);
+      abortControllerRef.current = null;
     }
   };
 
@@ -233,29 +213,69 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
     if (!lastUserMessage || !apiKey || !selectedModel) return;
 
-    handleSkipTyping();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const modelId = Date.now().toString();
+    const historyWithoutLast = messages[messages.length - 1].role === 'model'
+      ? messages.slice(0, -1)
+      : messages;
+
+    setMessages([...historyWithoutLast, { id: modelId, role: 'model', text: '' }]);
     setIsLoading(true);
+    setTypingMessageId(modelId);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const startTime = Date.now();
 
     try {
-      const historyWithoutLastModel = messages.filter((_, idx) => idx < messages.length - 1);
-      const responseText = await generateChatResponse(apiKey, selectedModel, lastUserMessage.text, historyWithoutLastModel);
-      
-      const modelId = Date.now().toString();
-      setIsLoading(false);
-      setMessages(prev => [...prev.slice(0, -1), { id: modelId, role: 'model', text: '' }]);
-      animateTextReveal(modelId, responseText);
+      await streamChatResponse(
+        apiKey,
+        selectedModel,
+        lastUserMessage.text,
+        historyWithoutLast.slice(0, -1),
+        (_chunk, accumulated) => {
+          setMessages(prev =>
+            prev.map(m => m.id === modelId ? { ...m, text: accumulated } : m)
+          );
+          scrollToBottom(false);
+        },
+        abortController.signal
+      );
+
+      const durationMs = Date.now() - startTime;
+      logQueryEvent({
+        userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
+        userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
+        modelId: selectedModel,
+        promptSnippet: lastUserMessage.text.slice(0, 100),
+        durationMs,
+        status: 'success'
+      });
     } catch (error: any) {
+      if (error.name === 'AbortError') return;
+      setMessages(prev =>
+        prev.map(m => m.id === modelId
+          ? { 
+              ...m, 
+              text: m.text 
+                ? `${m.text}\n\n*(Зв'язок перервано: ${error.message || 'помилка'}*` 
+                : `Помилка: ${error.message || 'Не вдалося повторити відповідь'}` 
+            }
+          : m
+        )
+      );
+    } finally {
       setIsLoading(false);
-      setMessages(prev => [...prev.slice(0, -1), { 
-        id: Date.now().toString(), 
-        role: 'model', 
-        text: `Помилка: ${error.message || 'Не вдалося повторити відповідь'}` 
-      }]);
+      setTypingMessageId(null);
+      abortControllerRef.current = null;
     }
   };
 
   const handleNewChat = () => {
-    handleSkipTyping();
+    handleStopGenerating();
     setMessages([]);
   };
 
@@ -280,7 +300,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         <div className="flex items-center gap-3">
           <button
             onClick={() => {
-              handleSkipTyping();
+              handleStopGenerating();
               onClose();
             }}
             className="p-2 -ml-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"
@@ -306,7 +326,7 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
           </button>
           <button
             onClick={() => {
-              handleSkipTyping();
+              handleStopGenerating();
               onClose();
             }}
             className="p-2 rounded-full hover:bg-[#252421] text-[#9E9A92] hover:text-[#EDE9DF] transition-colors"
@@ -364,16 +384,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                 message={m} 
                 isLast={index === messages.length - 1}
                 isTyping={typingMessageId === m.id}
-                onSkipTyping={handleSkipTyping}
+                onSkipTyping={handleStopGenerating}
                 onRetry={index === messages.length - 1 && m.role === 'model' ? handleRetry : undefined}
               />
             ))}
-            {isLoading && (
-              <div className="flex items-center gap-2 text-[#9E9A92] text-sm py-2 animate-in fade-in">
-                <div className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
-                <span>Генерую відповідь...</span>
-              </div>
-            )}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -499,13 +513,22 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
               </div>
             </div>
 
-            {/* Right: Send or Mic Button */}
+            {/* Right: Send, Stop or Mic Button */}
             <div className="flex items-center gap-1 shrink-0">
-              {inputValue.trim() ? (
+              {isLoading ? (
+                <button
+                  type="button"
+                  onClick={handleStopGenerating}
+                  className="w-9 h-9 rounded-full bg-[#2C2A26] border border-[#CC785C]/60 hover:bg-[#383530] text-[#EDE9DF] flex items-center justify-center shadow-md active:scale-95 transition-all group"
+                  title="Зупинити генерацію"
+                >
+                  <Square size={13} className="fill-[#CC785C] text-[#CC785C] group-hover:scale-110 transition-transform" />
+                </button>
+              ) : inputValue.trim() ? (
                 <button
                   type="button"
                   onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || !apiKey || !selectedModel || isLoading}
+                  disabled={!inputValue.trim() || !apiKey || !selectedModel}
                   className="w-9 h-9 rounded-full bg-[#CC785C] hover:bg-[#D97757] text-white flex items-center justify-center shadow-md active:scale-95 transition-all"
                   title="Надіслати"
                 >

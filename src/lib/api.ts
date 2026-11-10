@@ -64,8 +64,127 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
 }
 
 /**
- * Generates chat completion in non-streaming mode (stream: false)
- * to minimize server load on free-tier hosting.
+ * Streams chat completion in real-time (stream: true) via SSE
+ * providing instant Time-to-First-Token and smooth live text rendering.
+ */
+export async function streamChatResponse(
+  apiKey: string,
+  modelId: string,
+  prompt: string,
+  history: Message[],
+  onChunk: (chunk: string, accumulatedText: string) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  const messages = history.map(msg => ({
+    role: msg.role === 'model' ? 'assistant' : 'user',
+    content: msg.text
+  }));
+  messages.push({ role: 'user', content: prompt });
+
+  let lastError = null;
+
+  for (const baseUrl of BASE_URLS) {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: messages,
+          stream: true
+        }),
+        signal
+      });
+
+      if (response.status === 401) {
+        throw new Error("Невірний API ключ (помилка 401). Перевірте налаштування.");
+      }
+      if (response.status === 402) {
+        throw new Error("Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.");
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP помилка ${response.status} від ${baseUrl}`);
+      }
+
+      if (!response.body) {
+        throw new Error("Тіло відповіді порожнє");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let accumulatedText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // save incomplete fragment
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith(':')) continue;
+          if (trimmed === 'data: [DONE]') continue;
+
+          if (trimmed.startsWith('data: ')) {
+            const jsonStr = trimmed.slice(6);
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const deltaContent = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
+              if (deltaContent) {
+                accumulatedText += deltaContent;
+                onChunk(deltaContent, accumulatedText);
+              }
+            } catch (err) {
+              // Partial JSON, continue buffer
+            }
+          }
+        }
+      }
+
+      // Trailing chunk check
+      if (buffer.trim().startsWith('data: ') && buffer.trim() !== 'data: [DONE]') {
+        try {
+          const parsed = JSON.parse(buffer.trim().slice(6));
+          const deltaContent = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
+          if (deltaContent) {
+            accumulatedText += deltaContent;
+            onChunk(deltaContent, accumulatedText);
+          }
+        } catch (e) {}
+      }
+
+      if (accumulatedText.length > 0) {
+        return accumulatedText;
+      }
+
+      throw new Error("Отримано порожній потік тексту");
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        throw err;
+      }
+      console.warn(`Стрімінг не вдався для ${baseUrl}, пробуємо наступний сервер...`, err);
+      lastError = err;
+      if (err.message && (err.message.includes("401") || err.message.includes("402"))) {
+        throw err;
+      }
+    }
+  }
+
+  // Graceful fallback to non-streaming if proxy blocked SSE
+  console.warn("Стрімінг не спрацював, викликаємо fallback non-streaming режим...");
+  const nonStreamResult = await generateChatResponse(apiKey, modelId, prompt, history);
+  onChunk(nonStreamResult, nonStreamResult);
+  return nonStreamResult;
+}
+
+/**
+ * Generates chat completion in non-streaming mode (fallback)
  */
 export async function generateChatResponse(
   apiKey: string,
@@ -88,7 +207,7 @@ export async function generateChatResponse(
     body: JSON.stringify({
       model: modelId,
       messages: messages,
-      stream: false // Explicitly disable server streaming to lower server load
+      stream: false
     })
   });
 
@@ -97,3 +216,4 @@ export async function generateChatResponse(
   }
   throw new Error("Некоректна відповідь від API");
 }
+
