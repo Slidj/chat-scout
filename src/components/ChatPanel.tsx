@@ -50,6 +50,35 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [currentTitle, setCurrentTitle] = useState<string>('Новий чат');
   const chatCreatedAtRef = useRef<number>(Date.now());
 
+  // Track unread/unviewed history badge count
+  const [lastViewedCount, setLastViewedCount] = useState<number>(() => {
+    const saved = localStorage.getItem('last_viewed_chat_count');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+
+  // Auto-scroll control state (allows user to tap/scroll to pause auto-following)
+  const isAutoScrollPausedRef = useRef<boolean>(false);
+  const [isAutoScrollPaused, setIsAutoScrollPaused] = useState<boolean>(false);
+
+  const pauseAutoScroll = () => {
+    if (!isAutoScrollPausedRef.current) {
+      isAutoScrollPausedRef.current = true;
+      setIsAutoScrollPaused(true);
+    }
+  };
+
+  const resumeAutoScroll = () => {
+    isAutoScrollPausedRef.current = false;
+    setIsAutoScrollPaused(false);
+    scrollToBottom(true);
+  };
+
+  const handleOpenHistory = () => {
+    setIsHistoryOpen(true);
+    setLastViewedCount(savedChats.length);
+    localStorage.setItem('last_viewed_chat_count', String(savedChats.length));
+  };
+
   // Streaming & Generation state
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -137,14 +166,25 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     if (!mainScrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = mainScrollRef.current;
     const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-    setShowScrollBottom(distanceToBottom > 140);
+    setShowScrollBottom(distanceToBottom > 120);
+
+    // If streaming/loading and user scrolled up away from bottom, pause auto-scrolling
+    if ((isLoading || typingMessageId) && distanceToBottom > 60) {
+      pauseAutoScroll();
+    }
+
+    // If user manually scrolled all the way to bottom, resume auto-scrolling
+    if (distanceToBottom < 30 && isAutoScrollPausedRef.current) {
+      isAutoScrollPausedRef.current = false;
+      setIsAutoScrollPaused(false);
+    }
   };
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !isAutoScrollPausedRef.current) {
       scrollToBottom();
     }
-  }, [messages, isLoading, isOpen, typingMessageId]);
+  }, [messages, isOpen]);
 
   // Clean up any running stream and animation frame on unmount
   useEffect(() => {
@@ -204,11 +244,11 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
           prev.map(m => m.id === targetMessageId ? { ...m, text: nextText } : m)
         );
 
-        // Smooth scroll follow if user is near bottom
-        if (mainScrollRef.current) {
+        // Smooth scroll follow ONLY if user has not paused auto-scroll
+        if (!isAutoScrollPausedRef.current && mainScrollRef.current) {
           const { scrollTop, scrollHeight, clientHeight } = mainScrollRef.current;
           const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-          if (distanceToBottom < 140) {
+          if (distanceToBottom < 120) {
             mainScrollRef.current.scrollTop = scrollHeight;
           }
         }
@@ -304,10 +344,13 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     setIsLoading(true);
     setTypingMessageId(newModelId);
 
-    // Reset fluid stream buffers
+    // Reset fluid stream buffers & auto-scroll state
     streamTargetRef.current = '';
     streamDisplayedRef.current = '';
     isStreamingActiveRef.current = true;
+    isAutoScrollPausedRef.current = false;
+    setIsAutoScrollPaused(false);
+    scrollToBottom(false);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -415,10 +458,13 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     setIsLoading(true);
     setTypingMessageId(modelId);
 
-    // Reset fluid stream buffers
+    // Reset fluid stream buffers & auto-scroll state
     streamTargetRef.current = '';
     streamDisplayedRef.current = '';
     isStreamingActiveRef.current = true;
+    isAutoScrollPausedRef.current = false;
+    setIsAutoScrollPaused(false);
+    scrollToBottom(false);
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
@@ -569,14 +615,14 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
 
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setIsHistoryOpen(true)}
+            onClick={handleOpenHistory}
             className="relative p-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"
             title="Історія діалогів (зберігаються 3 дні)"
           >
             <History size={20} />
-            {savedChats.length > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 bg-[#CC785C] text-[#181715] text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-[18px] text-center shadow">
-                {savedChats.length}
+            {savedChats.length > lastViewedCount && (
+              <span className="absolute -top-0.5 -right-0.5 bg-[#CC785C] text-[#181715] text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-[18px] text-center shadow animate-in zoom-in-75">
+                {savedChats.length - lastViewedCount}
               </span>
             )}
           </button>
@@ -604,6 +650,22 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       <main 
         ref={mainScrollRef}
         onScroll={handleScroll}
+        onWheel={(e) => {
+          if ((isLoading || typingMessageId) && e.deltaY < 0) {
+            pauseAutoScroll();
+          }
+        }}
+        onTouchStart={() => {
+          if (isLoading || typingMessageId) {
+            pauseAutoScroll();
+          }
+        }}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('button, input, textarea, a')) return;
+          if (isLoading || typingMessageId) {
+            pauseAutoScroll();
+          }
+        }}
         className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 max-w-3xl mx-auto w-full flex flex-col relative"
       >
         {!apiKey ? (
@@ -630,14 +692,9 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
                 <Sparkles size={26} />
               </div>
             )}
-            <h2 className="font-claude-serif text-3xl font-normal text-[#EDE9DF] mb-2 tracking-tight">
-              {activeModelObj ? `Чим можу допомогти?` : 'Оберіть модель'}
+            <h2 className="font-claude-serif text-3xl font-normal text-[#EDE9DF] tracking-tight">
+              Чим можу допомогти?
             </h2>
-            <p className="text-sm text-[#9E9A92] max-w-xs leading-relaxed">
-              {activeModelObj?.priceInfo 
-                ? `${activeModelObj.name} готовий до роботи (${activeModelObj.priceInfo})` 
-                : 'Поставте запитання, щоб почати новий діалог'}
-            </p>
           </div>
         ) : (
           <div className="flex flex-col flex-1 pb-4">
@@ -655,16 +712,26 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
           </div>
         )}
 
-        {/* Floating Jump to Bottom Arrow Button (from Claude screenshot) */}
-        {showScrollBottom && (
+        {/* Floating Controls: Resume Auto-Scroll or Jump to Bottom */}
+        {(isAutoScrollPaused && (isLoading || typingMessageId)) ? (
           <button
-            onClick={() => scrollToBottom(true)}
+            onClick={resumeAutoScroll}
+            className="fixed bottom-28 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-[#242320]/95 border border-[#CC785C] text-[#EDE9DF] hover:bg-[#2C2A26] flex items-center gap-2 shadow-xl backdrop-blur-md z-30 transition-all active:scale-95 animate-in fade-in"
+            title="Слідкувати за відповіддю"
+          >
+            <span className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
+            <span className="text-xs font-semibold text-[#EDE9DF]">Слідкувати за текстом</span>
+            <ArrowDown size={14} className="text-[#CC785C]" />
+          </button>
+        ) : showScrollBottom ? (
+          <button
+            onClick={resumeAutoScroll}
             className="fixed bottom-28 left-1/2 -translate-x-1/2 w-9 h-9 rounded-full bg-[#2C2A26]/90 border border-[#403E3A] text-[#EDE9DF] hover:bg-[#383632] flex items-center justify-center shadow-lg backdrop-blur-sm z-30 transition-all active:scale-95 animate-in fade-in zoom-in-95"
             title="До кінця чату"
           >
             <ArrowDown size={18} />
           </button>
-        )}
+        ) : null}
       </main>
 
       {/* Signature Claude Input Box (Screenshot 4) */}
@@ -980,17 +1047,26 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         </div>
       )}
 
-      {/* History Slide-over Drawer */}
-      {isHistoryOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          {/* Backdrop */}
-          <div 
-            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity animate-in fade-in"
-            onClick={() => setIsHistoryOpen(false)}
-          />
+      {/* History Slide-over Drawer with smooth transition */}
+      <div 
+        className={`fixed inset-0 z-50 flex justify-end transition-[visibility] duration-300 ${
+          isHistoryOpen ? 'pointer-events-auto visible' : 'pointer-events-none invisible'
+        }`}
+      >
+        {/* Backdrop */}
+        <div 
+          className={`fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ease-out ${
+            isHistoryOpen ? 'opacity-100' : 'opacity-0'
+          }`}
+          onClick={() => setIsHistoryOpen(false)}
+        />
 
-          {/* Drawer Panel */}
-          <div className="relative w-full max-w-sm sm:max-w-md h-full bg-[#1A1917] border-l border-[#2E2C28] flex flex-col z-10 shadow-2xl animate-in slide-in-from-right duration-200">
+        {/* Drawer Panel */}
+        <div 
+          className={`relative w-full max-w-sm sm:max-w-md h-full bg-[#1A1917] border-l border-[#2E2C28] flex flex-col z-10 shadow-2xl transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+            isHistoryOpen ? 'translate-x-0' : 'translate-x-full'
+          }`}
+        >
             {/* Drawer Header */}
             <div 
               className="p-4 border-b border-[#2E2C28] flex items-center justify-between bg-[#1A1917] shrink-0"
@@ -1117,7 +1193,6 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
             </div>
           </div>
         </div>
-      )}
 
     </div>
   );
