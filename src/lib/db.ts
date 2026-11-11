@@ -1,6 +1,6 @@
 import { 
   collection, getDocs, doc, setDoc, deleteDoc, addDoc, 
-  onSnapshot, query, orderBy, limit, increment, Unsubscribe 
+  onSnapshot, query, orderBy, limit, increment, Unsubscribe, where 
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Provider, AiModel } from '../types';
@@ -298,4 +298,98 @@ export const subscribeToActivities = (callback: (events: ActivityEvent[]) => voi
     console.warn('Activities subscription error:', err);
   });
 };
+
+// -------------------------------------------------------------
+// Chat History Persistence & Auto-Cleanup (Retention: 3 days)
+// -------------------------------------------------------------
+export interface ChatSession {
+  id: string;
+  userId: string;
+  title: string;
+  modelId: string;
+  messages: any[];
+  createdAt: string | number;
+  updatedAt: string | number;
+  expiresAt: string | number;
+}
+
+export const CHAT_RETENTION_DAYS = 3;
+export const CHAT_RETENTION_MS = CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Saves or updates a chat session in Firestore.
+ * Automatically sets expiresAt to 3 days from the latest activity.
+ */
+export const saveChatSession = async (session: Omit<ChatSession, 'expiresAt'>): Promise<void> => {
+  try {
+    const expiresAt = new Date(Date.now() + CHAT_RETENTION_MS).toISOString();
+    const chatRef = doc(db, 'chats', session.id);
+    await setDoc(chatRef, {
+      ...session,
+      expiresAt
+    }, { merge: true });
+  } catch (e) {
+    console.error('Error saving chat session:', e);
+  }
+};
+
+/**
+ * Subscribes to all chat sessions belonging to a specific user.
+ */
+export const subscribeUserChats = (userId: string, callback: (chats: ChatSession[]) => void): Unsubscribe => {
+  const q = query(collection(db, 'chats'), where('userId', '==', userId));
+  return onSnapshot(q, (snapshot) => {
+    const chats = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ChatSession));
+    chats.sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime());
+    callback(chats);
+  }, (err) => {
+    console.warn('Chats subscription error:', err);
+  });
+};
+
+/**
+ * Deletes a single chat session.
+ */
+export const deleteChatSession = async (chatId: string): Promise<void> => {
+  try {
+    await deleteDoc(doc(db, 'chats', chatId));
+  } catch (e) {
+    console.error('Error deleting chat session:', e);
+  }
+};
+
+/**
+ * Clears all chat sessions for a specific user.
+ */
+export const clearUserChats = async (userId: string): Promise<void> => {
+  try {
+    const q = query(collection(db, 'chats'), where('userId', '==', userId));
+    const snapshot = await getDocs(q);
+    const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+    await Promise.all(deletePromises);
+  } catch (e) {
+    console.error('Error clearing user chats:', e);
+  }
+};
+
+/**
+ * Background auto-cleanup: deletes chats older than the retention threshold (>3 days).
+ * Keeps the free Firestore database permanently lean and minimal.
+ */
+export const cleanupExpiredChats = async (): Promise<number> => {
+  try {
+    const nowIso = new Date().toISOString();
+    const q = query(collection(db, 'chats'), where('expiresAt', '<', nowIso), limit(50));
+    const snapshot = await getDocs(q);
+    if (snapshot.empty) return 0;
+    const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+    await Promise.all(deletePromises);
+    console.log(`Auto-cleaned ${snapshot.size} expired chat(s) from database`);
+    return snapshot.size;
+  } catch (e) {
+    console.warn('Cleanup expired chats skipped:', e);
+    return 0;
+  }
+};
+
 

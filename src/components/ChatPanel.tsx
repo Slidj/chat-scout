@@ -2,12 +2,16 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
-  Check, Square
+  Check, Square, History, Trash2, MessageSquare
 } from 'lucide-react';
 import { Message, streamChatResponse, generateChatResponse } from '../lib/api';
 import { ChatMessage } from './ChatMessage';
 import { getTierClasses, getTierTextColor, resolveColorToHex } from '../lib/utils';
-import { logQueryEvent, getOrInitClientId } from '../lib/db';
+import { 
+  logQueryEvent, getOrInitClientId, 
+  saveChatSession, subscribeUserChats, deleteChatSession, clearUserChats, 
+  cleanupExpiredChats, ChatSession, CHAT_RETENTION_DAYS 
+} from '../lib/db';
 
 export interface ChatModelOption {
   id: string;
@@ -38,6 +42,14 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const [isAddSheetOpen, setIsAddSheetOpen] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   
+  // Chat Session & Persistence state (Real-time Firestore + 3-day auto-expiry retention)
+  const currentUid = currentUser?.id ? String(currentUser.id) : getOrInitClientId();
+  const [currentChatId, setCurrentChatId] = useState<string>(() => 'chat_' + Date.now());
+  const [savedChats, setSavedChats] = useState<ChatSession[]>([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [currentTitle, setCurrentTitle] = useState<string>('Новий чат');
+  const chatCreatedAtRef = useRef<number>(Date.now());
+
   // Streaming & Generation state
   const [typingMessageId, setTypingMessageId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -59,6 +71,53 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const activeModelObj = apiModels.find(m => m.id === selectedModel);
+
+  // Subscribe to user's saved chats & auto-clean expired ones in the background
+  useEffect(() => {
+    // 1. Silent background pruning of chats older than 3 days
+    cleanupExpiredChats().catch(console.error);
+
+    // 2. Real-time subscription to user's chats
+    const unsubscribe = subscribeUserChats(currentUid, (chats) => {
+      setSavedChats(chats);
+    });
+
+    return () => unsubscribe();
+  }, [currentUid]);
+
+  const persistChat = (msgs: Message[], customTitle?: string) => {
+    if (msgs.length === 0) return;
+    const title = customTitle || (currentTitle !== 'Новий чат' ? currentTitle : (msgs[0]?.text?.slice(0, 45) || 'Діалог'));
+    if (currentTitle === 'Новий чат') {
+      setCurrentTitle(title);
+    }
+    saveChatSession({
+      id: currentChatId,
+      userId: currentUid,
+      title,
+      modelId: selectedModel || '',
+      messages: msgs,
+      createdAt: chatCreatedAtRef.current,
+      updatedAt: Date.now(),
+    }).catch(console.error);
+  };
+
+  const formatChatDate = (timestamp: number | string) => {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return '';
+    const now = new Date();
+    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+    
+    const timeStr = date.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    if (diffDays === 0 && date.getDate() === now.getDate()) {
+      return `Сьогодні, ${timeStr}`;
+    }
+    if (diffDays === 1 || (diffDays === 0 && date.getDate() !== now.getDate())) {
+      return `Вчора, ${timeStr}`;
+    }
+    return date.toLocaleDateString('uk-UA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -196,6 +255,15 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     isStreamingActiveRef.current = false;
     stopFluidLoop();
     setIsLoading(false);
+    
+    // Save whatever text was generated so far
+    if (typingMessageId && streamDisplayedRef.current) {
+      setMessages(prev => {
+        const updated = prev.map(m => m.id === typingMessageId ? { ...m, text: streamDisplayedRef.current } : m);
+        persistChat(updated);
+        return updated;
+      });
+    }
     setTypingMessageId(null);
   };
 
@@ -219,6 +287,10 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
     setMessages(newHistory);
     setInputValue('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
+
+    // Persist immediately with initial prompt
+    const chatTitle = currentTitle === 'Новий чат' ? userText.slice(0, 45) : currentTitle;
+    persistChat(newHistory, chatTitle);
 
     const newModelId = (Date.now() + 1).toString();
     const placeholderModelMessage: Message = {
@@ -257,6 +329,15 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
 
       isStreamingActiveRef.current = false;
 
+      // Persist completed chat response to Firestore
+      const finalAssistantMessage: Message = {
+        id: newModelId,
+        role: 'model',
+        text: streamTargetRef.current,
+      };
+      const finalHistory = [...newHistory, finalAssistantMessage];
+      persistChat(finalHistory, chatTitle);
+
       const durationMs = Date.now() - startTime;
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
@@ -286,17 +367,20 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       });
 
       stopFluidLoop();
+      const errorContent = `Помилка: ${error.message || 'Щось пішло не так при зверненні до API. Перевірте з\'єднання.'}`;
       setMessages(prev =>
         prev.map(m => m.id === newModelId
           ? { 
               ...m, 
               text: m.text 
                 ? `${m.text}\n\n*(Зв'язок перервано: ${error.message || 'помилка'}*` 
-                : `Помилка: ${error.message || 'Щось пішло не так при зверненні до API. Перевірте з\'єднання.'}` 
+                : errorContent
             }
           : m
         )
       );
+
+      persistChat([...newHistory, { id: newModelId, role: 'model', text: errorContent }], chatTitle);
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
@@ -355,6 +439,13 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
 
       isStreamingActiveRef.current = false;
 
+      const finalAssistantMessage: Message = {
+        id: modelId,
+        role: 'model',
+        text: streamTargetRef.current,
+      };
+      persistChat([...historyWithoutLast, finalAssistantMessage]);
+
       const durationMs = Date.now() - startTime;
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
@@ -368,17 +459,19 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
       isStreamingActiveRef.current = false;
       if (error.name === 'AbortError') return;
       stopFluidLoop();
+      const retryErrorText = `Помилка: ${error.message || 'Не вдалося повторити відповідь'}`;
       setMessages(prev =>
         prev.map(m => m.id === modelId
           ? { 
               ...m, 
               text: m.text 
                 ? `${m.text}\n\n*(Зв'язок перервано: ${error.message || 'помилка'}*` 
-                : `Помилка: ${error.message || 'Не вдалося повторити відповідь'}` 
+                : retryErrorText
             }
           : m
         )
       );
+      persistChat([...historyWithoutLast, { id: modelId, role: 'model', text: retryErrorText }]);
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
@@ -387,7 +480,49 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
 
   const handleNewChat = () => {
     handleStopGenerating();
+    const newId = 'chat_' + Date.now();
+    setCurrentChatId(newId);
+    chatCreatedAtRef.current = Date.now();
+    setCurrentTitle('Новий чат');
     setMessages([]);
+    setIsHistoryOpen(false);
+  };
+
+  const handleSelectChat = (chat: ChatSession) => {
+    handleStopGenerating();
+    setCurrentChatId(chat.id);
+    setMessages(chat.messages || []);
+    setCurrentTitle(chat.title || 'Чат');
+    chatCreatedAtRef.current = typeof chat.createdAt === 'number' 
+      ? chat.createdAt 
+      : (new Date(chat.createdAt).getTime() || Date.now());
+    if (chat.modelId && chat.modelId !== selectedModel) {
+      onChangeModel(chat.modelId);
+    }
+    setIsHistoryOpen(false);
+  };
+
+  const handleDeleteChat = async (chatId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await deleteChatSession(chatId);
+      if (chatId === currentChatId) {
+        handleNewChat();
+      }
+    } catch (err) {
+      console.error('Error deleting chat session:', err);
+    }
+  };
+
+  const handleClearAllChats = async () => {
+    if (window.confirm('Ви впевнені, що хочете видалити всі збережені чати з бази даних?')) {
+      try {
+        await clearUserChats(currentUid);
+        handleNewChat();
+      } catch (err) {
+        console.error('Error clearing user chats:', err);
+      }
+    }
   };
 
   const handleAttachFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -420,14 +555,31 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
             <ArrowLeft size={22} />
           </button>
           
-          <div className="flex items-center gap-2">
-            <span className="font-medium text-base text-[#EDE9DF] tracking-tight">
-              {activeModelObj?.name || 'Чат'}
+          <div className="flex flex-col min-w-0">
+            <span className="font-medium text-sm text-[#EDE9DF] tracking-tight truncate max-w-[180px] sm:max-w-xs">
+              {currentTitle !== 'Новий чат' ? currentTitle : (activeModelObj?.name || 'Чат')}
             </span>
+            {currentTitle !== 'Новий чат' && (
+              <span className="text-[11px] text-[#9E9A92] truncate">
+                {activeModelObj?.name || 'Чат'}
+              </span>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setIsHistoryOpen(true)}
+            className="relative p-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"
+            title="Історія діалогів (зберігаються 3 дні)"
+          >
+            <History size={20} />
+            {savedChats.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 bg-[#CC785C] text-[#181715] text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-[18px] text-center shadow">
+                {savedChats.length}
+              </span>
+            )}
+          </button>
           <button
             onClick={handleNewChat}
             className="p-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"
@@ -824,6 +976,145 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
 
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* History Slide-over Drawer */}
+      {isHistoryOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity animate-in fade-in"
+            onClick={() => setIsHistoryOpen(false)}
+          />
+
+          {/* Drawer Panel */}
+          <div className="relative w-full max-w-sm sm:max-w-md h-full bg-[#1A1917] border-l border-[#2E2C28] flex flex-col z-10 shadow-2xl animate-in slide-in-from-right duration-200">
+            {/* Drawer Header */}
+            <div 
+              className="p-4 border-b border-[#2E2C28] flex items-center justify-between bg-[#1A1917] shrink-0"
+              style={{ paddingTop: 'calc(1rem + var(--safe-top, 0px))' }}
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#282723] text-[#CC785C] flex items-center justify-center">
+                  <History size={18} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-base text-[#EDE9DF]">Історія діалогів</h3>
+                  <div className="flex items-center gap-1.5 text-xs text-[#9E9A92]">
+                    <Clock size={12} className="text-[#CC785C]" />
+                    <span>Зберігаються {CHAT_RETENTION_DAYS} дні • Автоочищення</span>
+                  </div>
+                </div>
+              </div>
+              <button 
+                onClick={() => setIsHistoryOpen(false)}
+                className="p-2 rounded-full hover:bg-[#282723] text-[#9E9A92] hover:text-[#EDE9DF] transition-colors"
+                title="Закрити історію"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Actions Bar */}
+            <div className="p-3 bg-[#201F1C] border-b border-[#2E2C28] flex items-center justify-between gap-2 shrink-0">
+              <button
+                onClick={handleNewChat}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-[#282723] hover:bg-[#32302C] text-xs font-medium text-[#EDE9DF] border border-[#3A3833] transition-colors"
+              >
+                <Plus size={14} className="text-[#CC785C]" />
+                <span>Новий діалог</span>
+              </button>
+
+              {savedChats.length > 0 && (
+                <button
+                  onClick={handleClearAllChats}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-[#282723] hover:bg-rose-950/40 text-xs font-medium text-rose-300 border border-[#3A3833] hover:border-rose-900/60 transition-colors"
+                  title="Очистити всі мої чати"
+                >
+                  <Trash2 size={14} />
+                  <span>Очистити все</span>
+                </button>
+              )}
+            </div>
+
+            {/* Chat List */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {savedChats.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-6 text-[#9E9A92]">
+                  <div className="w-12 h-12 rounded-2xl bg-[#242320] flex items-center justify-center mb-3 text-[#CC785C]">
+                    <MessageSquare size={22} />
+                  </div>
+                  <p className="font-medium text-sm text-[#EDE9DF] mb-1">Немає збережених діалогів</p>
+                  <p className="text-xs text-[#8A8780] max-w-xs leading-relaxed">
+                    Почніть спілкування з ШІ моделлю. Всі ваші діалоги автоматично збережуться в хмарі на {CHAT_RETENTION_DAYS} дні.
+                  </p>
+                </div>
+              ) : (
+                savedChats.map((chat) => {
+                  const isActive = chat.id === currentChatId;
+                  const chatModelObj = apiModels.find(m => m.id === chat.modelId);
+                  const modelTitle = chatModelObj?.name || chat.modelId.split('/').pop() || 'Модель';
+
+                  return (
+                    <div
+                      key={chat.id}
+                      onClick={() => handleSelectChat(chat)}
+                      className={`group relative p-3 rounded-xl border cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-[#282622] border-[#CC785C]/60 ring-1 ring-[#CC785C]/30'
+                          : 'bg-[#22211E] border-[#2E2C28] hover:bg-[#282723] hover:border-[#3E3C36]'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <h4 className="text-sm font-medium text-[#EDE9DF] line-clamp-1 flex-1 pr-1 group-hover:text-white transition-colors">
+                          {chat.title || 'Діалог без назви'}
+                        </h4>
+                        <button
+                          onClick={(e) => handleDeleteChat(chat.id, e)}
+                          className="opacity-70 group-hover:opacity-100 p-1.5 rounded-md text-[#8A8780] hover:text-rose-400 hover:bg-[#32302C] transition-all"
+                          title="Видалити цей чат"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between text-[11px] text-[#8A8780]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="px-1.5 py-0.5 rounded bg-[#1A1917] border border-[#2E2C28] text-[#D8D4CC] font-mono text-[10px] truncate max-w-[130px]">
+                            {modelTitle}
+                          </span>
+                          <span>•</span>
+                          <span className="shrink-0">{chat.messages?.length || 0} пов.</span>
+                        </div>
+                        <span className="text-[10px] shrink-0 ml-1">
+                          {formatChatDate(chat.updatedAt || chat.createdAt)}
+                        </span>
+                      </div>
+
+                      {isActive && (
+                        <div className="mt-2 pt-2 border-t border-[#36342F] flex items-center gap-1.5 text-[10px] text-[#CC785C] font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#CC785C]" />
+                          Поточний відкритий діалог
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Retention Notice Footer */}
+            <div 
+              className="p-3 bg-[#161513] border-t border-[#2A2824] text-[11px] text-[#8A8780] flex items-start gap-2 shrink-0"
+              style={{ paddingBottom: 'calc(0.75rem + var(--safe-bottom, 0px))' }}
+            >
+              <Clock size={13} className="text-[#CC785C] shrink-0 mt-0.5" />
+              <p className="leading-tight">
+                Безкоштовне хмарне сховище автоматично звільняє місце, видаляючи діалоги через {CHAT_RETENTION_DAYS} дні неактивності.
+              </p>
+            </div>
           </div>
         </div>
       )}

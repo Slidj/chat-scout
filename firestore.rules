@@ -16,5 +16,8 @@ service cloud.firestore {
     match /queries/{queryId} {
       allow read, write: if true;
     }
+    match /chats/{chatId} {
+      allow read, write: if true;
+    }
   }
 }
