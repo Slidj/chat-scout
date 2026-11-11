@@ -1,9 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   X, Wallet, CreditCard, Copy, Check, Upload, FileText, Image as ImageIcon,
   AlertCircle, Sparkles, Clock, CheckCircle2, ArrowRight, ShieldCheck, Trash2
 } from 'lucide-react';
-import { createTopupRequest, TopupRequest } from '../lib/db';
+import { 
+  createTopupRequest, TopupRequest, 
+  subscribePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS 
+} from '../lib/db';
 
 interface TopupModalProps {
   isOpen: boolean;
@@ -12,16 +15,10 @@ interface TopupModalProps {
   userRequests?: TopupRequest[];
 }
 
-// Default payment card credentials (can be updated or customized)
-const PAYMENT_CARD = {
-  number: '4441 1144 5555 8888',
-  bank: 'Monobank / ПриватБанк',
-  recipient: 'Адміністратор сервісу',
-};
-
 const AMOUNT_PRESETS = [100, 200, 500, 1000];
 
 export function TopupModal({ isOpen, onClose, currentUser, userRequests = [] }: TopupModalProps) {
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings>(DEFAULT_PAYMENT_SETTINGS);
   const [amount, setAmount] = useState<string>('200');
   const [comment, setComment] = useState('');
   const [attachment, setAttachment] = useState<{ url: string; name: string; type: string } | null>(null);
@@ -33,10 +30,17 @@ export function TopupModal({ isOpen, onClose, currentUser, userRequests = [] }: 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    const unsub = subscribePaymentSettings((settings) => {
+      setPaymentSettings(settings);
+    });
+    return () => unsub();
+  }, []);
+
   if (!isOpen) return null;
 
   const handleCopyCard = () => {
-    navigator.clipboard.writeText(PAYMENT_CARD.number.replace(/\s+/g, ''));
+    navigator.clipboard.writeText(paymentSettings.cardNumber.replace(/\s+/g, ''));
     setCopiedCard(true);
     setTimeout(() => setCopiedCard(false), 2000);
   };
@@ -334,16 +338,16 @@ export function TopupModal({ isOpen, onClose, currentUser, userRequests = [] }: 
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-[#C49B85] flex items-center gap-1.5">
                     <CreditCard size={14} className="text-[#CC785C]" />
-                    Реквізити для оплати
+                    Актуальні реквізити для оплати
                   </span>
                   <span className="text-[11px] font-mono text-[#A89F95]">
-                    {PAYMENT_CARD.bank}
+                    {paymentSettings.bankName || 'Банк'}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between gap-2 mt-2">
                   <span className="font-mono text-base sm:text-lg font-bold tracking-wider text-[#FAF8F5]">
-                    {PAYMENT_CARD.number}
+                    {paymentSettings.cardNumber}
                   </span>
                   <button
                     type="button"
@@ -356,12 +360,26 @@ export function TopupModal({ isOpen, onClose, currentUser, userRequests = [] }: 
                   </button>
                 </div>
 
-                <div className="text-[11px] text-[#8E8B83] mt-2 flex items-center justify-between border-t border-[#382C22] pt-2">
-                  <span>Отримувач: {PAYMENT_CARD.recipient}</span>
+                <div className="text-[11px] text-[#8E8B83] mt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-t border-[#382C22] pt-2">
+                  <span>Отримувач: {paymentSettings.recipientName || 'Адміністратор'}</span>
                   <span className="text-emerald-400 flex items-center gap-1">
-                    <ShieldCheck size={13} /> Перевірено
+                    <ShieldCheck size={13} /> Реквізити верифіковано
                   </span>
                 </div>
+
+                {paymentSettings.note && (
+                  <div className="mt-2 text-[11px] text-[#C0B9AE] bg-[#1F1C18] p-2 rounded-xl border border-[#3E342B]">
+                    💡 {paymentSettings.note}
+                  </div>
+                )}
+              </div>
+
+              {/* Notice regarding 3-day retention of coupons */}
+              <div className="flex items-start gap-2.5 p-3 rounded-2xl bg-[#231F1A] border border-[#48382C] text-xs text-[#C8C2B7]">
+                <Clock size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong className="text-amber-300">Зверніть увагу:</strong> Після підтвердження переказу код купона надійде у верхню шапку (конверт). Купон зберігатиметься в додатку <strong className="text-white">протягом 3 днів</strong> — скопіюйте та активуйте його вчасно.
+                </span>
               </div>
 
               {/* Amount Selection */}

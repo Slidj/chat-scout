@@ -25,5 +25,8 @@ service cloud.firestore {
     match /coupons/{couponId} {
       allow read, write: if true;
     }
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
   }
 }

@@ -5,12 +5,13 @@ import {
   subscribeToUsers, subscribeToQueries, subscribeToActivities,
   deleteUser, toggleBlockUser,
   AppUser, ActivityEvent, QueryLog, logActivityEvent,
-  TopupRequest, subscribeToTopups, updateTopupStatus, sendCouponToUser
+  TopupRequest, subscribeToTopups, updateTopupStatus, sendCouponToUser,
+  subscribePaymentSettings, updatePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS
 } from '../lib/db';
 import { fetchModels } from '../lib/api';
 import { Provider, AiModel } from '../types';
 import { 
-  Plus, Edit2, Trash2, X, Upload, Check, Palette, Shield, 
+  Plus, Edit2, Edit3, Trash2, X, Upload, Check, Palette, Shield, 
   LayoutDashboard, Building2, Cpu, Key, Users, Menu, TrendingUp, 
   Clock, RefreshCw, Eye, EyeOff, Search, ChevronRight, Activity, 
   Sparkles, CheckCircle2, AlertCircle, BarChart3, Globe, Zap,
@@ -52,6 +53,16 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [replyMessage, setReplyMessage] = useState('');
   const [isSendingCoupon, setIsSendingCoupon] = useState(false);
   const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
+
+  // Dynamic Payment / Bank Card Settings State
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings>(DEFAULT_PAYMENT_SETTINGS);
+  const [isEditingPaymentSettings, setIsEditingPaymentSettings] = useState(false);
+  const [cardFormNumber, setCardFormNumber] = useState('');
+  const [cardFormBank, setCardFormBank] = useState('');
+  const [cardFormRecipient, setCardFormRecipient] = useState('');
+  const [cardFormNote, setCardFormNote] = useState('');
+  const [isSavingCard, setIsSavingCard] = useState(false);
+  const [cardSaveSuccess, setCardSaveSuccess] = useState(false);
 
   // Drill-down Modal State (Clickable Cards & Stats)
   const [drillModal, setDrillModal] = useState<DrillDownModal>(null);
@@ -118,12 +129,20 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     const unsubQueries = subscribeToQueries((liveQueries) => setQueries(liveQueries));
     const unsubActivities = subscribeToActivities((liveActs) => setActivities(liveActs));
     const unsubTopups = subscribeToTopups((liveTopups) => setTopups(liveTopups));
+    const unsubPayment = subscribePaymentSettings((settings) => {
+      setPaymentSettings(settings);
+      setCardFormNumber(settings.cardNumber);
+      setCardFormBank(settings.bankName || '');
+      setCardFormRecipient(settings.recipientName || '');
+      setCardFormNote(settings.note || '');
+    });
 
     return () => {
       unsubUsers();
       unsubQueries();
       unsubActivities();
       unsubTopups();
+      unsubPayment();
     };
   }, []);
 
@@ -503,6 +522,30 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       });
     } catch (err) {
       console.error('Error rejecting topup:', err);
+    }
+  };
+
+  const handleSaveCardSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cardFormNumber.trim()) {
+      alert('Будь ласка, вкажіть номер картки');
+      return;
+    }
+    setIsSavingCard(true);
+    try {
+      await updatePaymentSettings({
+        cardNumber: cardFormNumber.trim(),
+        bankName: cardFormBank.trim() || undefined,
+        recipientName: cardFormRecipient.trim() || undefined,
+        note: cardFormNote.trim() || undefined
+      }, currentUser?.first_name || currentUser?.username || 'Admin');
+      setIsEditingPaymentSettings(false);
+      setCardSaveSuccess(true);
+      setTimeout(() => setCardSaveSuccess(false), 3500);
+    } catch (err: any) {
+      alert('Помилка збереження реквізитів: ' + err.message);
+    } finally {
+      setIsSavingCard(false);
     }
   };
 
@@ -1874,6 +1917,166 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* Dynamic Payment Card Settings Box (Admin can change card number anytime) */}
+              <div className="bg-[#242320] p-5 rounded-3xl border border-[#3D352E] shadow-sm relative overflow-hidden">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-[#36271D] text-[#CC785C] border border-[#523A2A] flex items-center justify-center shrink-0 shadow-xs">
+                      <CreditCard size={22} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-bold text-[#FAF8F5]">Реквізити банківської картки</h3>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-300 font-semibold border border-emerald-800/40">
+                          Активні для користувачів
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#8E8B83] mt-0.5">
+                        Усі користувачі бачать цей номер у вікні «Поповнити баланс» при здійсненні переказу
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsEditingPaymentSettings(!isEditingPaymentSettings);
+                      setCardFormNumber(paymentSettings.cardNumber);
+                      setCardFormBank(paymentSettings.bankName || '');
+                      setCardFormRecipient(paymentSettings.recipientName || '');
+                      setCardFormNote(paymentSettings.note || '');
+                    }}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-[#CC785C] hover:bg-[#D97757] text-white rounded-xl text-xs font-semibold transition-all active:scale-95 shadow-sm shrink-0"
+                  >
+                    <Edit3 size={15} />
+                    <span>{isEditingPaymentSettings ? 'Приховати форму' : 'Змінити номер картки'}</span>
+                  </button>
+                </div>
+
+                {/* Current Active Info Cards */}
+                <div className="mt-4 pt-4 border-t border-[#33302B] grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-[#1C1A17] p-3 rounded-2xl border border-[#35322D]">
+                    <div className="text-[10px] uppercase font-semibold text-[#8E8B83] tracking-wider mb-1">Номер картки</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-sm sm:text-base font-bold text-[#FAF8F5] tracking-wider truncate">
+                        {paymentSettings.cardNumber}
+                      </span>
+                      <button
+                        onClick={() => handleCopyText(paymentSettings.cardNumber.replace(/\s+/g, ''), 'admin_card')}
+                        className="text-[#8E8B83] hover:text-[#ECE8E1] p-1 transition-colors"
+                        title="Скопіювати номер картки"
+                      >
+                        {copiedKey === 'admin_card' ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1C1A17] p-3 rounded-2xl border border-[#35322D]">
+                    <div className="text-[10px] uppercase font-semibold text-[#8E8B83] tracking-wider mb-1">Банк & Отримувач</div>
+                    <div className="text-xs font-medium text-[#ECE8E1] truncate">
+                      {paymentSettings.bankName || 'Банк'} • {paymentSettings.recipientName || 'Адміністратор'}
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1C1A17] p-3 rounded-2xl border border-[#35322D]">
+                    <div className="text-[10px] uppercase font-semibold text-[#8E8B83] tracking-wider mb-1">Статус налаштувань</div>
+                    <div className="text-xs text-[#8E8B83] truncate">
+                      {paymentSettings.updatedAt 
+                        ? `Оновлено ${new Date(paymentSettings.updatedAt).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}`
+                        : 'За замовчуванням'} ({paymentSettings.updatedBy || 'Admin'})
+                    </div>
+                  </div>
+                </div>
+
+                {cardSaveSuccess && (
+                  <div className="mt-3 p-3 bg-emerald-950/60 border border-emerald-800/60 rounded-2xl text-xs text-emerald-300 flex items-center gap-2 animate-in fade-in">
+                    <CheckCircle2 size={16} />
+                    <span>Реквізити картки успішно збережено в базі! Тепер усі користувачі бачать новий номер.</span>
+                  </div>
+                )}
+
+                {/* Inline Edit Form */}
+                {isEditingPaymentSettings && (
+                  <form onSubmit={handleSaveCardSettings} className="mt-4 pt-4 border-t border-[#38332C] space-y-3.5 bg-[#1C1A17] p-4 rounded-2xl border border-[#483B30] animate-in zoom-in-95">
+                    <div className="text-xs font-bold text-[#FAF8F5] flex items-center gap-2">
+                      <Edit3 size={14} className="text-[#CC785C]" />
+                      <span>Редагування реквізитів для прийому платежів</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                          Номер банківської картки *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={cardFormNumber}
+                          onChange={(e) => setCardFormNumber(e.target.value)}
+                          placeholder="4441 1144 5555 8888"
+                          className="w-full px-3 py-2 bg-[#252320] border border-[#3E3C37] rounded-xl text-sm font-mono text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                          Назва банку
+                        </label>
+                        <input
+                          type="text"
+                          value={cardFormBank}
+                          onChange={(e) => setCardFormBank(e.target.value)}
+                          placeholder="Monobank / ПриватБанк / Sense..."
+                          className="w-full px-3 py-2 bg-[#252320] border border-[#3E3C37] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                          Отримувач (ПІБ або назва)
+                        </label>
+                        <input
+                          type="text"
+                          value={cardFormRecipient}
+                          onChange={(e) => setCardFormRecipient(e.target.value)}
+                          placeholder="ФОП / ПІБ отримувача"
+                          className="w-full px-3 py-2 bg-[#252320] border border-[#3E3C37] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                          Підказка для призначення або коментаря
+                        </label>
+                        <input
+                          type="text"
+                          value={cardFormNote}
+                          onChange={(e) => setCardFormNote(e.target.value)}
+                          placeholder="Вказуйте ваш нік або надсилайте чек"
+                          className="w-full px-3 py-2 bg-[#252320] border border-[#3E3C37] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingPaymentSettings(false)}
+                        className="px-4 py-2 bg-[#292723] hover:bg-[#32302B] text-xs font-semibold rounded-xl text-[#9E9A92] transition-colors"
+                      >
+                        Скасувати
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSavingCard}
+                        className="px-5 py-2 bg-[#CC785C] hover:bg-[#D97757] text-white text-xs font-bold rounded-xl transition-all shadow-md active:scale-95 disabled:opacity-50"
+                      >
+                        {isSavingCard ? 'Збереження...' : 'Зберегти нові реквізити'}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
 
               {/* Filters & Search Bar */}

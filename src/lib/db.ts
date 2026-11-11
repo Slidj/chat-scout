@@ -1,5 +1,5 @@
 import { 
-  collection, getDocs, doc, setDoc, deleteDoc, addDoc, 
+  collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc, 
   onSnapshot, query, orderBy, limit, increment, Unsubscribe, where 
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -416,6 +416,8 @@ export interface TopupRequest {
   updatedAt: string;
 }
 
+export const COUPON_RETENTION_DAYS = 3;
+
 export interface UserCoupon {
   id: string;
   topupId?: string;
@@ -428,6 +430,7 @@ export interface UserCoupon {
   isRead: boolean;
   isClaimed?: boolean;
   createdAt: string;
+  expiresAt?: string;
 }
 
 export const createTopupRequest = async (
@@ -478,13 +481,16 @@ export const updateTopupStatus = async (
 };
 
 export const sendCouponToUser = async (
-  couponData: Omit<UserCoupon, 'id' | 'createdAt' | 'isRead'>
+  couponData: Omit<UserCoupon, 'id' | 'createdAt' | 'isRead' | 'expiresAt'>
 ): Promise<string> => {
-  const now = new Date().toISOString();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + COUPON_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  
   const docRef = await addDoc(collection(db, 'coupons'), {
     ...couponData,
     isRead: false,
-    createdAt: now
+    createdAt: now.toISOString(),
+    expiresAt
   });
 
   await logActivityEvent({
@@ -496,13 +502,70 @@ export const sendCouponToUser = async (
   return docRef.id;
 };
 
+/**
+ * Removes coupons older than 3 days (COUPON_RETENTION_DAYS) from the database
+ */
+export const cleanupExpiredCoupons = async (userId?: string): Promise<number> => {
+  try {
+    const cutoffTime = Date.now() - COUPON_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const couponsRef = collection(db, 'coupons');
+    const q = userId 
+      ? query(couponsRef, where('userId', '==', userId))
+      : couponsRef;
+
+    const snapshot = await getDocs(q);
+    let deletedCount = 0;
+
+    for (const d of snapshot.docs) {
+      const data = d.data();
+      const createdAtMs = new Date(data.createdAt || 0).getTime();
+      const expiresAtMs = data.expiresAt ? new Date(data.expiresAt).getTime() : 0;
+      
+      const isExpired = (expiresAtMs > 0 && expiresAtMs < Date.now()) || (createdAtMs > 0 && createdAtMs < cutoffTime);
+      if (isExpired) {
+        await deleteDoc(d.ref);
+        deletedCount++;
+      }
+    }
+
+    return deletedCount;
+  } catch (e) {
+    console.warn('Cleanup expired coupons skipped:', e);
+    return 0;
+  }
+};
+
+export const deleteUserCoupon = async (couponId: string): Promise<void> => {
+  try {
+    await deleteDoc(doc(db, 'coupons', couponId));
+  } catch (e) {
+    console.error('Error deleting coupon:', e);
+  }
+};
+
 export const subscribeUserCoupons = (
   userId: string,
   callback: (coupons: UserCoupon[]) => void
 ): Unsubscribe => {
+  // Fire background cleanup for this user
+  cleanupExpiredCoupons(userId).catch(console.warn);
+
   const q = query(collection(db, 'coupons'), where('userId', '==', userId));
   return onSnapshot(q, (snapshot) => {
-    const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserCoupon));
+    const cutoffTime = Date.now() - COUPON_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Map and filter out expired coupons
+    const list = snapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() } as UserCoupon))
+      .filter(c => {
+        const cTime = new Date(c.createdAt || 0).getTime();
+        const expTime = c.expiresAt ? new Date(c.expiresAt).getTime() : 0;
+        if (expTime > 0 && expTime < now) return false;
+        if (cTime > 0 && cTime < cutoffTime) return false;
+        return true;
+      });
+
     list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     callback(list);
   }, (err) => {
@@ -526,6 +589,73 @@ export const markCouponAsClaimed = async (couponId: string): Promise<void> => {
   } catch (e) {
     console.error('Error marking coupon as claimed:', e);
   }
+};
+
+// -------------------------------------------------------------
+// Dynamic Payment Requisites / Bank Card Settings
+// -------------------------------------------------------------
+export interface PaymentSettings {
+  cardNumber: string;
+  bankName?: string;
+  recipientName?: string;
+  note?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export const DEFAULT_PAYMENT_SETTINGS: PaymentSettings = {
+  cardNumber: '4441 1144 5555 8888',
+  bankName: 'Monobank / ПриватБанк',
+  recipientName: 'Адміністратор сервісу',
+  note: 'Вказуйте ваш нікнейм або надсилайте скріншот оплати через форму'
+};
+
+export const getPaymentSettings = async (): Promise<PaymentSettings> => {
+  try {
+    const docSnap = await getDoc(doc(db, 'settings', 'payment'));
+    if (docSnap.exists()) {
+      return { ...DEFAULT_PAYMENT_SETTINGS, ...docSnap.data() } as PaymentSettings;
+    }
+    return DEFAULT_PAYMENT_SETTINGS;
+  } catch (e) {
+    console.warn('Error reading payment settings:', e);
+    return DEFAULT_PAYMENT_SETTINGS;
+  }
+};
+
+export const updatePaymentSettings = async (
+  settings: Partial<PaymentSettings>,
+  adminName?: string
+): Promise<void> => {
+  const ref = doc(db, 'settings', 'payment');
+  const now = new Date().toISOString();
+  await setDoc(ref, {
+    ...settings,
+    updatedAt: now,
+    updatedBy: adminName || 'Admin'
+  }, { merge: true });
+
+  await logActivityEvent({
+    type: 'admin_action',
+    description: `Оновлено банківські реквізити: картка ${settings.cardNumber ? settings.cardNumber.slice(-4).padStart(16, '•') : 'без змін'}`,
+    user: adminName || 'Admin'
+  }).catch(console.warn);
+};
+
+export const subscribePaymentSettings = (
+  callback: (settings: PaymentSettings) => void
+): Unsubscribe => {
+  const ref = doc(db, 'settings', 'payment');
+  return onSnapshot(ref, (docSnap) => {
+    if (docSnap.exists()) {
+      callback({ ...DEFAULT_PAYMENT_SETTINGS, ...docSnap.data() } as PaymentSettings);
+    } else {
+      callback(DEFAULT_PAYMENT_SETTINGS);
+    }
+  }, (err) => {
+    console.warn('Payment settings subscription error:', err);
+    callback(DEFAULT_PAYMENT_SETTINGS);
+  });
 };
 
 

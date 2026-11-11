@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { 
   X, Copy, Check, Sparkles, Gift, CheckCircle2, 
-  MessageSquare, ChevronRight, Calendar, ArrowUpRight
+  MessageSquare, ChevronRight, Calendar, ArrowUpRight,
+  Clock, AlertTriangle, Trash2
 } from 'lucide-react';
-import { UserCoupon, markCouponAsRead, markCouponAsClaimed } from '../lib/db';
+import { UserCoupon, markCouponAsRead, markCouponAsClaimed, deleteUserCoupon } from '../lib/db';
 
 interface CouponCardModalProps {
   isOpen: boolean;
@@ -15,10 +16,21 @@ interface CouponCardModalProps {
 export function CouponCardModal({ isOpen, onClose, coupons, onStartChat }: CouponCardModalProps) {
   const [selectedCouponIndex, setSelectedCouponIndex] = useState(0);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   if (!isOpen || coupons.length === 0) return null;
 
   const currentCoupon = coupons[selectedCouponIndex] || coupons[0];
+
+  // Calculate 3-day retention time
+  const createdAtMs = new Date(currentCoupon.createdAt).getTime() || Date.now();
+  const expiresAtMs = currentCoupon.expiresAt 
+    ? new Date(currentCoupon.expiresAt).getTime() 
+    : createdAtMs + 3 * 24 * 60 * 60 * 1000;
+  const diffMs = Math.max(0, expiresAtMs - Date.now());
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffHours / 24);
+  const remHours = diffHours % 24;
 
   const handleCopy = (code: string) => {
     navigator.clipboard.writeText(code);
@@ -33,6 +45,24 @@ export function CouponCardModal({ isOpen, onClose, coupons, onStartChat }: Coupo
     onClose();
     if (onStartChat) {
       onStartChat();
+    }
+  };
+
+  const handleDelete = async () => {
+    if (window.confirm('Видалити цей купон зі списку? Переконайтеся, що ви вже зберегли код.')) {
+      setIsDeleting(true);
+      try {
+        await deleteUserCoupon(currentCoupon.id);
+        if (coupons.length <= 1) {
+          onClose();
+        } else {
+          setSelectedCouponIndex(0);
+        }
+      } catch (e) {
+        console.error('Error deleting coupon:', e);
+      } finally {
+        setIsDeleting(false);
+      }
     }
   };
 
@@ -158,20 +188,30 @@ export function CouponCardModal({ isOpen, onClose, coupons, onStartChat }: Coupo
               </div>
             </div>
 
-            {/* Issue Date */}
-            <div className="mt-3 flex items-center justify-between text-[10px] text-[#76736C]">
-              <span className="flex items-center gap-1">
-                <Calendar size={11} />
-                {new Date(currentCoupon.createdAt).toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' })}
+            {/* Issue Date & Expiry Countdown */}
+            <div className="mt-3.5 pt-3 border-t border-[#2D2A24] flex items-center justify-between text-[11px]">
+              <span className="flex items-center gap-1.5 text-[#8E8B83]">
+                <Calendar size={12} className="text-[#CC785C]" />
+                {new Date(currentCoupon.createdAt).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}
               </span>
-              <span className="text-emerald-400 font-medium flex items-center gap-1">
-                <CheckCircle2 size={11} /> Дійсний
-              </span>
+
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold text-[10px]">
+                <Clock size={11} className="text-amber-400" />
+                <span>Залишилось: {diffDays > 0 ? `${diffDays} дн. ` : ''}{remHours} год.</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3-day Retention Alert Notice */}
+          <div className="mt-4 p-3 rounded-2xl bg-[#201C16] border border-[#483726] flex items-start gap-2.5 text-xs text-[#CDC6BA] leading-relaxed">
+            <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <strong className="text-amber-300 font-semibold">Термін збереження в додатку:</strong> Скопіюйте та активуйте код протягом <strong className="text-white">3 днів</strong>. Через 3 дні купон автоматично зникне з меню, щоб не засмічувати список при наступних поповненнях.
             </div>
           </div>
 
           {/* Action Buttons */}
-          <div className="mt-5 space-y-2">
+          <div className="mt-4 space-y-2">
             <button
               onClick={handleClaimAndChat}
               className="w-full py-3 bg-gradient-to-r from-[#CC785C] to-[#E08A6E] hover:from-[#D97757] hover:to-[#EB967A] text-white rounded-2xl text-xs sm:text-sm font-bold transition-all shadow-lg active:scale-98 flex items-center justify-center gap-2"
@@ -181,15 +221,27 @@ export function CouponCardModal({ isOpen, onClose, coupons, onStartChat }: Coupo
               <ArrowUpRight size={16} />
             </button>
 
-            <button
-              onClick={() => {
-                markCouponAsRead(currentCoupon.id);
-                onClose();
-              }}
-              className="w-full py-2 bg-transparent hover:bg-[#25221E] text-[#8E8B83] hover:text-[#EDE9DF] rounded-xl text-xs font-medium transition-colors"
-            >
-              Закрити
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="flex-1 py-2 bg-[#211E1A] hover:bg-[#2C2621] text-[#A89F95] hover:text-rose-400 border border-[#363028] hover:border-rose-900/60 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5"
+                title="Видалити купон зі списку вже зараз"
+              >
+                <Trash2 size={13} />
+                <span>{isDeleting ? 'Видалення...' : 'Видалити зі списку'}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  markCouponAsRead(currentCoupon.id);
+                  onClose();
+                }}
+                className="flex-1 py-2 bg-transparent hover:bg-[#25221E] text-[#8E8B83] hover:text-[#EDE9DF] rounded-xl text-xs font-medium transition-colors"
+              >
+                Закрити
+              </button>
+            </div>
           </div>
 
         </div>
