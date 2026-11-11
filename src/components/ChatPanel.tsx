@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
-  Check, Square, History, Trash2, MessageSquare
+  Check, Square, History, Trash2, MessageSquare, Mail
 } from 'lucide-react';
 import { Message, streamChatResponse, generateChatResponse } from '../lib/api';
 import { ChatMessage } from './ChatMessage';
@@ -32,9 +32,21 @@ interface ChatPanelProps {
   onClose: () => void;
   isOpen: boolean;
   currentUser?: any;
+  unreadCouponsCount?: number;
+  onOpenCoupons?: () => void;
 }
 
-export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onClose, isOpen, currentUser }: ChatPanelProps) {
+export function ChatPanel({ 
+  apiKey, 
+  selectedModel, 
+  onChangeModel, 
+  apiModels, 
+  onClose, 
+  isOpen, 
+  currentUser,
+  unreadCouponsCount = 0,
+  onOpenCoupons
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -614,6 +626,20 @@ export function ChatPanel({ apiKey, selectedModel, onChangeModel, apiModels, onC
         </div>
 
         <div className="flex items-center gap-1">
+          {unreadCouponsCount > 0 && onOpenCoupons && (
+            <button
+              onClick={onOpenCoupons}
+              className="relative p-2 rounded-full animate-envelope-pulse transition-all ring-1 ring-amber-500/40"
+              title="Вам надіслано купон на поповнення!"
+            >
+              <Mail size={20} className="stroke-[2.2]" />
+              <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border border-[#181715]"></span>
+              </span>
+            </button>
+          )}
+
           <button
             onClick={handleOpenHistory}
             className="relative p-2 rounded-full hover:bg-[#252421] text-[#EDE9DF] transition-colors"

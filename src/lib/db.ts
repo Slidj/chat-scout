@@ -62,7 +62,7 @@ export interface AppUser {
 
 export interface ActivityEvent {
   id?: string;
-  type: 'visit' | 'query' | 'model_change' | 'admin_action';
+  type: 'visit' | 'query' | 'model_change' | 'admin_action' | 'topup_request' | 'coupon_sent';
   description: string;
   timestamp: string;
   user?: string;
@@ -391,5 +391,142 @@ export const cleanupExpiredChats = async (): Promise<number> => {
     return 0;
   }
 };
+
+// -------------------------------------------------------------
+// Top-up & Payment Requests + Admin Coupon Communications
+// -------------------------------------------------------------
+export interface TopupRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userUsername?: string;
+  userPhotoUrl?: string;
+  telegramId?: number;
+  amount: number | string;
+  currency: string;
+  userComment?: string;
+  attachmentUrl?: string;
+  attachmentName?: string;
+  attachmentType?: string;
+  status: 'pending' | 'completed' | 'rejected';
+  adminReplyMessage?: string;
+  adminCouponCode?: string;
+  adminCouponAmount?: number | string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserCoupon {
+  id: string;
+  topupId?: string;
+  userId: string;
+  userName?: string;
+  couponCode: string;
+  amount: number | string;
+  currency: string;
+  message?: string;
+  isRead: boolean;
+  isClaimed?: boolean;
+  createdAt: string;
+}
+
+export const createTopupRequest = async (
+  data: Omit<TopupRequest, 'id' | 'createdAt' | 'updatedAt' | 'status'>
+): Promise<string> => {
+  const now = new Date().toISOString();
+  const docRef = await addDoc(collection(db, 'topups'), {
+    ...data,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now
+  });
+  
+  await logActivityEvent({
+    type: 'topup_request',
+    description: `Заявка на поповнення: ${data.amount} ${data.currency} від ${data.userName}`,
+    user: data.userName || data.userId
+  }).catch(console.warn);
+
+  return docRef.id;
+};
+
+export const subscribeToTopups = (callback: (requests: TopupRequest[]) => void): Unsubscribe => {
+  const q = query(collection(db, 'topups'), orderBy('createdAt', 'desc'), limit(100));
+  return onSnapshot(q, (snapshot) => {
+    const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TopupRequest));
+    callback(list);
+  }, (err) => {
+    console.warn('Topups subscription error:', err);
+  });
+};
+
+export const updateTopupStatus = async (
+  topupId: string,
+  status: 'completed' | 'rejected',
+  adminData?: {
+    adminReplyMessage?: string;
+    adminCouponCode?: string;
+    adminCouponAmount?: number | string;
+  }
+): Promise<void> => {
+  const ref = doc(db, 'topups', topupId);
+  await setDoc(ref, {
+    status,
+    ...adminData,
+    updatedAt: new Date().toISOString()
+  }, { merge: true });
+};
+
+export const sendCouponToUser = async (
+  couponData: Omit<UserCoupon, 'id' | 'createdAt' | 'isRead'>
+): Promise<string> => {
+  const now = new Date().toISOString();
+  const docRef = await addDoc(collection(db, 'coupons'), {
+    ...couponData,
+    isRead: false,
+    createdAt: now
+  });
+
+  await logActivityEvent({
+    type: 'coupon_sent',
+    description: `Купон ${couponData.couponCode} надіслано користувачу ${couponData.userName || couponData.userId}`,
+    user: couponData.userName || couponData.userId
+  }).catch(console.warn);
+
+  return docRef.id;
+};
+
+export const subscribeUserCoupons = (
+  userId: string,
+  callback: (coupons: UserCoupon[]) => void
+): Unsubscribe => {
+  const q = query(collection(db, 'coupons'), where('userId', '==', userId));
+  return onSnapshot(q, (snapshot) => {
+    const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserCoupon));
+    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    callback(list);
+  }, (err) => {
+    console.warn('User coupons subscription error:', err);
+  });
+};
+
+export const markCouponAsRead = async (couponId: string): Promise<void> => {
+  try {
+    const ref = doc(db, 'coupons', couponId);
+    await setDoc(ref, { isRead: true }, { merge: true });
+  } catch (e) {
+    console.error('Error marking coupon as read:', e);
+  }
+};
+
+export const markCouponAsClaimed = async (couponId: string): Promise<void> => {
+  try {
+    const ref = doc(db, 'coupons', couponId);
+    await setDoc(ref, { isClaimed: true, isRead: true }, { merge: true });
+  } catch (e) {
+    console.error('Error marking coupon as claimed:', e);
+  }
+};
+
 
 

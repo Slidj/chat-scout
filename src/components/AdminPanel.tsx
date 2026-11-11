@@ -4,7 +4,8 @@ import {
   saveModel, updateModel, deleteModel, getUsers, getRecentActivities, getQueries,
   subscribeToUsers, subscribeToQueries, subscribeToActivities,
   deleteUser, toggleBlockUser,
-  AppUser, ActivityEvent, QueryLog, logActivityEvent
+  AppUser, ActivityEvent, QueryLog, logActivityEvent,
+  TopupRequest, subscribeToTopups, updateTopupStatus, sendCouponToUser
 } from '../lib/db';
 import { fetchModels } from '../lib/api';
 import { Provider, AiModel } from '../types';
@@ -14,11 +15,12 @@ import {
   Clock, RefreshCw, Eye, EyeOff, Search, ChevronRight, Activity, 
   Sparkles, CheckCircle2, AlertCircle, BarChart3, Globe, Zap,
   UserCheck, ArrowUpRight, Copy, Ban, Unlock, ChevronLeft,
-  ChevronsLeft, ChevronsRight, Info
+  ChevronsLeft, ChevronsRight, Info, CreditCard, Gift, Send,
+  ExternalLink, FileText, Image as ImageIcon, CheckCircle, XCircle
 } from 'lucide-react';
 import { resolveColorToHex, COLOR_PRESETS, ColorPreset, resizeImageFile, getTierClasses } from '../lib/utils';
 
-type AdminTab = 'dashboard' | 'providers' | 'models' | 'api-keys' | 'users';
+type AdminTab = 'dashboard' | 'providers' | 'models' | 'api-keys' | 'users' | 'topups';
 type DrillDownModal = null | 'all_users' | 'active_today' | 'queries_detail' | 'models_overview' | 'chart_point' | 'provider_detail';
 
 interface AdminPanelProps {
@@ -38,7 +40,18 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [users, setUsers] = useState<AppUser[]>([]);
   const [queries, setQueries] = useState<QueryLog[]>([]);
   const [activities, setActivities] = useState<ActivityEvent[]>([]);
+  const [topups, setTopups] = useState<TopupRequest[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Top-up & Coupon Management State
+  const [topupFilter, setTopupFilter] = useState<'all' | 'pending' | 'completed' | 'rejected'>('all');
+  const [topupSearch, setTopupSearch] = useState('');
+  const [selectedTopupForReply, setSelectedTopupForReply] = useState<TopupRequest | null>(null);
+  const [replyCouponCode, setReplyCouponCode] = useState('');
+  const [replyAmount, setReplyAmount] = useState<number | string>('');
+  const [replyMessage, setReplyMessage] = useState('');
+  const [isSendingCoupon, setIsSendingCoupon] = useState(false);
+  const [previewAttachmentUrl, setPreviewAttachmentUrl] = useState<string | null>(null);
 
   // Drill-down Modal State (Clickable Cards & Stats)
   const [drillModal, setDrillModal] = useState<DrillDownModal>(null);
@@ -104,11 +117,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     const unsubUsers = subscribeToUsers((liveUsers) => setUsers(liveUsers));
     const unsubQueries = subscribeToQueries((liveQueries) => setQueries(liveQueries));
     const unsubActivities = subscribeToActivities((liveActs) => setActivities(liveActs));
+    const unsubTopups = subscribeToTopups((liveTopups) => setTopups(liveTopups));
 
     return () => {
       unsubUsers();
       unsubQueries();
       unsubActivities();
+      unsubTopups();
     };
   }, []);
 
@@ -430,12 +445,74 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     return range;
   };
 
+  const pendingTopupsCount = topups.filter(t => t.status === 'pending').length;
+
+  const handleOpenReplyModal = (req: TopupRequest) => {
+    setSelectedTopupForReply(req);
+    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    setReplyCouponCode(`TOPUP-${req.amount}-${randomSuffix}`);
+    setReplyAmount(req.amount);
+    setReplyMessage(`Дякуємо за поповнення! Платіж на суму ${req.amount} грн підтверджено. Ваш персональний промокод для чату активовано.`);
+  };
+
+  const handleGenerateNewCouponCode = () => {
+    if (!selectedTopupForReply) return;
+    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    setReplyCouponCode(`TOPUP-${selectedTopupForReply.amount}-${randomSuffix}`);
+  };
+
+  const handleSendCouponSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTopupForReply || !replyCouponCode.trim()) return;
+
+    setIsSendingCoupon(true);
+    try {
+      // 1. Send coupon to user
+      await sendCouponToUser({
+        topupId: selectedTopupForReply.id,
+        userId: selectedTopupForReply.userId,
+        userName: selectedTopupForReply.userName,
+        couponCode: replyCouponCode.trim(),
+        amount: replyAmount,
+        currency: '₴',
+        message: replyMessage.trim() || undefined,
+      });
+
+      // 2. Mark topup as completed with admin coupon info
+      await updateTopupStatus(selectedTopupForReply.id, 'completed', {
+        adminCouponCode: replyCouponCode.trim(),
+        adminCouponAmount: replyAmount,
+        adminReplyMessage: replyMessage.trim() || undefined,
+      });
+
+      setSelectedTopupForReply(null);
+    } catch (err) {
+      console.error('Error sending coupon:', err);
+      alert('Помилка при відправці купона');
+    } finally {
+      setIsSendingCoupon(false);
+    }
+  };
+
+  const handleRejectTopup = async (req: TopupRequest) => {
+    const reason = prompt('Вкажіть причину відхилення (наприклад: Платіж не знайдено на картці):', 'Платіж не знайдено на картці');
+    if (reason === null) return;
+    try {
+      await updateTopupStatus(req.id, 'rejected', {
+        adminReplyMessage: reason.trim() || 'Платіж не підтверджено'
+      });
+    } catch (err) {
+      console.error('Error rejecting topup:', err);
+    }
+  };
+
   const navItems = [
     { id: 'dashboard' as AdminTab, label: 'Дашборд', icon: LayoutDashboard, badge: null, desc: 'Жива статистика та аналітика' },
+    { id: 'topups' as AdminTab, label: 'Поповнення & Купони', icon: CreditCard, badge: pendingTopupsCount > 0 ? pendingTopupsCount : null, desc: 'Перевірка чеків, видача купонів' },
+    { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти, блокування, сторінки' },
     { id: 'providers' as AdminTab, label: 'Постачальники', icon: Building2, badge: providers.length, desc: 'Бренди, кольори, лого' },
     { id: 'models' as AdminTab, label: 'ШІ Моделі', icon: Cpu, badge: models.length, desc: 'Каталог, API, RPG тарифи' },
     { id: 'api-keys' as AdminTab, label: 'API Ключі & Сервер', icon: Key, badge: null, desc: 'Master key, синхронізація' },
-    { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти, блокування, сторінки' },
   ];
 
   const currentTabTitle = navItems.find(n => n.id === activeTab)?.label || 'Дашборд';
@@ -1760,6 +1837,332 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
             </div>
           )}
 
+          {/* TOPUPS & COUPONS TAB */}
+          {activeTab === 'topups' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              {/* Header & Stats Banner */}
+              <div className="bg-[#242320] p-5 rounded-3xl border border-[#363430] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <CreditCard size={20} className="text-[#CC785C]" />
+                    <h2 className="text-lg font-bold text-[#FAF8F5]">Заявки на поповнення & Купони</h2>
+                  </div>
+                  <p className="text-xs text-[#8E8B83] mt-1">
+                    Перевіряйте квитанції користувачів та видавайте їм персональні коди купонів
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="px-3 py-1.5 rounded-2xl bg-[#1B1A17] border border-[#35332F] text-center">
+                    <div className="text-[10px] text-[#8E8B83] font-medium">Очікують</div>
+                    <div className={`text-sm font-bold ${pendingTopupsCount > 0 ? 'text-amber-400 font-extrabold' : 'text-[#ECE8E1]'}`}>
+                      {pendingTopupsCount}
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-1.5 rounded-2xl bg-[#1B1A17] border border-[#35332F] text-center">
+                    <div className="text-[10px] text-[#8E8B83] font-medium">Підтверджено</div>
+                    <div className="text-sm font-bold text-emerald-400">
+                      {topups.filter(t => t.status === 'completed').length}
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-1.5 rounded-2xl bg-[#1B1A17] border border-[#35332F] text-center">
+                    <div className="text-[10px] text-[#8E8B83] font-medium">Всього</div>
+                    <div className="text-sm font-bold text-[#FAF8F5]">
+                      {topups.length}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Filters & Search Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="inline-flex bg-[#1F1E1B] p-1 rounded-2xl border border-[#33312D] overflow-x-auto">
+                  <button
+                    onClick={() => setTopupFilter('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      topupFilter === 'all' 
+                        ? 'bg-[#CC785C] text-white shadow-xs' 
+                        : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                    }`}
+                  >
+                    Всі ({topups.length})
+                  </button>
+                  <button
+                    onClick={() => setTopupFilter('pending')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      topupFilter === 'pending' 
+                        ? 'bg-[#CC785C] text-white shadow-xs' 
+                        : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                    }`}
+                  >
+                    <span>Очікують</span>
+                    {pendingTopupsCount > 0 && (
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                    )}
+                    <span className="text-[11px] font-mono">({pendingTopupsCount})</span>
+                  </button>
+                  <button
+                    onClick={() => setTopupFilter('completed')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      topupFilter === 'completed' 
+                        ? 'bg-[#CC785C] text-white shadow-xs' 
+                        : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                    }`}
+                  >
+                    Підтверджені ({topups.filter(t => t.status === 'completed').length})
+                  </button>
+                  <button
+                    onClick={() => setTopupFilter('rejected')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      topupFilter === 'rejected' 
+                        ? 'bg-[#CC785C] text-white shadow-xs' 
+                        : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                    }`}
+                  >
+                    Відхилені ({topups.filter(t => t.status === 'rejected').length})
+                  </button>
+                </div>
+
+                <div className="relative w-full sm:w-64">
+                  <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#76736C]" />
+                  <input
+                    type="text"
+                    value={topupSearch}
+                    onChange={(e) => setTopupSearch(e.target.value)}
+                    placeholder="Пошук за користувачем..."
+                    className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-[#242320] border border-[#383632] text-xs text-[#ECE8E1] placeholder-[#76736C] focus:outline-none focus:border-[#CC785C] transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* Requests List */}
+              {(() => {
+                const filtered = topups.filter(t => {
+                  const matchStatus = topupFilter === 'all' || t.status === topupFilter;
+                  const matchSearch = !topupSearch.trim() || 
+                    t.userName?.toLowerCase().includes(topupSearch.toLowerCase()) ||
+                    t.userUsername?.toLowerCase().includes(topupSearch.toLowerCase()) ||
+                    String(t.telegramId || '').includes(topupSearch) ||
+                    String(t.amount || '').includes(topupSearch);
+                  return matchStatus && matchSearch;
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="p-12 text-center bg-[#242320] border border-[#363430] rounded-3xl text-[#8E8B83]">
+                      <div className="w-12 h-12 rounded-2xl bg-[#2D2820] text-[#CC785C] flex items-center justify-center mx-auto mb-3">
+                        <CreditCard size={24} />
+                      </div>
+                      <p className="font-semibold text-sm text-[#FAF8F5]">Заявок не знайдено</p>
+                      <p className="text-xs text-[#76736C] mt-1">
+                        {topupFilter === 'pending' ? 'Всі заявки на поповнення вже опрацьовано' : 'Користувачі ще не надсилали заявок на поповнення'}
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-4">
+                    {filtered.map(req => {
+                      const userNick = req.userUsername ? `@${req.userUsername}` : req.userName;
+                      const copyId = `user_${req.id}`;
+                      const isCopied = copiedKey === copyId;
+
+                      return (
+                        <div 
+                          key={req.id}
+                          className={`bg-[#242320] border rounded-3xl p-5 space-y-4 transition-all shadow-xs ${
+                            req.status === 'pending'
+                              ? 'border-amber-500/40 hover:border-amber-500/70 bg-gradient-to-r from-[#242320] to-[#26221B]'
+                              : req.status === 'completed'
+                              ? 'border-[#363430] hover:border-emerald-500/40'
+                              : 'border-[#363430] opacity-80'
+                          }`}
+                        >
+                          {/* Top Row: User details & Amount */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              {req.userPhotoUrl ? (
+                                <img 
+                                  src={req.userPhotoUrl} 
+                                  alt={req.userName} 
+                                  className="w-12 h-12 rounded-2xl object-cover border border-[#44413C] shadow-sm shrink-0"
+                                />
+                              ) : (
+                                <div className="w-12 h-12 rounded-2xl bg-[#CC785C] text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0">
+                                  {req.userName.charAt(0).toUpperCase()}
+                                </div>
+                              )}
+
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-sm text-[#FAF8F5]">{req.userName}</span>
+                                  {req.userUsername && (
+                                    <span className="text-xs text-[#CC785C] font-mono">@{req.userUsername}</span>
+                                  )}
+                                  <button
+                                    onClick={() => handleCopyText(userNick, copyId)}
+                                    className="p-1 rounded-md text-[#8E8B83] hover:text-[#FAF8F5] hover:bg-[#34322D] transition-colors"
+                                    title="Скопіювати нікнейм користувача"
+                                  >
+                                    {isCopied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                                  </button>
+                                </div>
+
+                                <div className="text-[11px] text-[#7A7770] flex items-center gap-2 mt-0.5">
+                                  <span>ID: {req.telegramId || req.userId}</span>
+                                  <span>•</span>
+                                  <span>{new Date(req.createdAt).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Amount & Status Badge */}
+                            <div className="flex items-center gap-3 self-end sm:self-auto">
+                              <div className="text-right">
+                                <div className="text-lg sm:text-xl font-black text-emerald-400 font-mono tracking-tight">
+                                  ₴{req.amount}
+                                </div>
+                                <div className="text-[10px] text-[#7A7770]">UAH Переказ</div>
+                              </div>
+
+                              <div>
+                                {req.status === 'pending' && (
+                                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-950/70 text-amber-300 border border-amber-800/60 shadow-xs">
+                                    <Clock size={12} className="animate-spin" />
+                                    <span>Очікує звірки</span>
+                                  </span>
+                                )}
+                                {req.status === 'completed' && (
+                                  <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950/70 text-emerald-300 border border-emerald-800/60">
+                                    <CheckCircle size={12} />
+                                    <span>Видано купон</span>
+                                  </span>
+                                )}
+                                {req.status === 'rejected' && (
+                                  <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-rose-950/70 text-rose-300 border border-rose-800/60">
+                                    <XCircle size={12} />
+                                    <span>Відхилено</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Middle Row: Attached Receipt / Screenshot & Comment */}
+                          <div className="p-3.5 bg-[#1B1A17] border border-[#33312D] rounded-2xl space-y-3">
+                            {req.userComment && (
+                              <div className="text-xs text-[#C8C4BC] flex items-start gap-2">
+                                <span className="font-semibold text-[#8E8B83] shrink-0">Коментар користувача:</span>
+                                <span>«{req.userComment}»</span>
+                              </div>
+                            )}
+
+                            {/* Attachment viewer */}
+                            {req.attachmentUrl && (
+                              <div className="pt-2 border-t border-[#2C2A26] flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  {req.attachmentType?.startsWith('image/') || req.attachmentUrl.startsWith('data:image/') ? (
+                                    <div 
+                                      onClick={() => setPreviewAttachmentUrl(req.attachmentUrl!)}
+                                      className="relative group/thumb cursor-pointer"
+                                    >
+                                      <img 
+                                        src={req.attachmentUrl} 
+                                        alt="Чек" 
+                                        className="w-16 h-16 rounded-xl object-cover border border-[#44413C] group-hover/thumb:opacity-90 transition-opacity" 
+                                      />
+                                      <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity text-white text-[10px] font-bold">
+                                        Збільшити
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="w-12 h-12 rounded-xl bg-[#282723] text-[#CC785C] flex items-center justify-center border border-[#3A3834]">
+                                      <FileText size={22} />
+                                    </div>
+                                  )}
+
+                                  <div>
+                                    <div className="text-xs font-medium text-[#FAF8F5]">
+                                      {req.attachmentName || 'Квитанція_переказу'}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewAttachmentUrl(req.attachmentUrl!)}
+                                      className="text-[11px] text-[#CC785C] hover:underline flex items-center gap-1 mt-0.5"
+                                    >
+                                      <ExternalLink size={11} />
+                                      <span>Відкрити чек на весь екран</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Completed Coupon Information */}
+                          {req.status === 'completed' && req.adminCouponCode && (
+                            <div className="p-3 bg-emerald-950/30 border border-emerald-800/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <Gift size={16} className="text-emerald-400 shrink-0" />
+                                <div>
+                                  <span className="text-[#8E8B83]">Виданий купон: </span>
+                                  <span className="font-mono font-bold text-emerald-300 tracking-wider">
+                                    {req.adminCouponCode}
+                                  </span>
+                                  <span className="text-[#8E8B83] ml-2 font-semibold">({req.adminCouponAmount || req.amount} грн)</span>
+                                </div>
+                              </div>
+                              {req.adminReplyMessage && (
+                                <div className="text-[11px] text-[#A8A49C] truncate max-w-sm">
+                                  «{req.adminReplyMessage}»
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Action Buttons for Admin */}
+                          <div className="pt-2 flex flex-wrap items-center justify-end gap-2.5">
+                            {req.status === 'pending' ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRejectTopup(req)}
+                                  className="px-4 py-2 rounded-xl bg-[#2A2925] hover:bg-rose-950/50 text-xs font-semibold text-rose-300 border border-[#3E3C36] hover:border-rose-800/60 transition-colors"
+                                >
+                                  Відхилити заявку
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenReplyModal(req)}
+                                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#CC785C] to-[#E08A6E] hover:from-[#D97757] hover:to-[#EB967A] text-xs font-bold text-white shadow-md transition-all active:scale-98 flex items-center gap-1.5"
+                                >
+                                  <Gift size={15} />
+                                  <span>Відповісти & Надіслати купон</span>
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReplyModal(req)}
+                                className="px-3 py-1.5 rounded-xl bg-[#292723] hover:bg-[#34322D] text-xs font-medium text-[#8E8B83] hover:text-[#FAF8F5] transition-colors"
+                              >
+                                Надіслати ще купон
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
         </main>
       </div>
 
@@ -2157,6 +2560,146 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
             }
           }}
         />
+      )}
+
+      {/* Reply & Send Coupon Modal */}
+      {selectedTopupForReply && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div 
+            className="bg-[#242320] text-[#ECE8E1] p-5 sm:p-6 rounded-3xl w-full max-w-lg shadow-2xl border border-[#3E3C37] space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#33312D] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                  <Gift size={18} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[#FAF8F5]">Видача купона користувачу</h3>
+                  <p className="text-xs text-[#8E8B83]">
+                    {selectedTopupForReply.userName} ({selectedTopupForReply.userUsername ? `@${selectedTopupForReply.userUsername}` : `ID: ${selectedTopupForReply.userId}`})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedTopupForReply(null)}
+                className="p-1.5 rounded-full hover:bg-[#34322D] text-[#8E8B83] hover:text-[#ECE8E1] transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendCouponSubmit} className="space-y-4">
+              {/* Payment Summary */}
+              <div className="p-3 bg-[#1B1A17] border border-[#33312D] rounded-2xl flex items-center justify-between text-xs">
+                <div>
+                  <span className="text-[#8E8B83]">Заявлена сума переказу:</span>
+                  <span className="font-bold text-emerald-400 ml-1.5 text-sm">₴{selectedTopupForReply.amount}</span>
+                </div>
+                <div className="text-[11px] text-[#7A7770]">
+                  {new Date(selectedTopupForReply.createdAt).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              </div>
+
+              {/* Coupon Code Generator */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-[#A8A49C]">
+                    Код купона для користувача: *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleGenerateNewCouponCode}
+                    className="text-[11px] text-[#CC785C] hover:underline flex items-center gap-1"
+                  >
+                    <Sparkles size={11} />
+                    <span>Згенерувати інший</span>
+                  </button>
+                </div>
+                
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={replyCouponCode}
+                    onChange={(e) => setReplyCouponCode(e.target.value.toUpperCase())}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#1B1A17] border border-[#3E3C36] font-mono font-bold text-sm text-amber-300 tracking-wider focus:outline-none focus:border-[#CC785C]"
+                  />
+                </div>
+              </div>
+
+              {/* Amount to issue */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#A8A49C]">
+                  Номінал купона (₴ UAH): *
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  value={replyAmount}
+                  onChange={(e) => setReplyAmount(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl bg-[#1B1A17] border border-[#3E3C36] text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                />
+              </div>
+
+              {/* Message to User */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#A8A49C]">
+                  Повідомлення до купона:
+                </label>
+                <textarea
+                  rows={2}
+                  value={replyMessage}
+                  onChange={(e) => setReplyMessage(e.target.value)}
+                  placeholder="Вкажіть коментар або привітання..."
+                  className="w-full px-3 py-2 rounded-xl bg-[#1B1A17] border border-[#3E3C36] text-xs text-[#ECE8E1] focus:outline-none focus:border-[#CC785C] resize-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5 border-t border-[#33312D]">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTopupForReply(null)}
+                  className="px-4 py-2 text-xs font-medium text-[#8E8B83] hover:text-[#ECE8E1] hover:bg-[#34322D] rounded-xl transition-colors"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSendingCoupon || !replyCouponCode.trim()}
+                  className="px-5 py-2.5 bg-gradient-to-r from-[#CC785C] to-[#E08A6E] hover:from-[#D97757] hover:to-[#EB967A] disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-all active:scale-98 flex items-center gap-2"
+                >
+                  <Send size={14} />
+                  <span>{isSendingCoupon ? 'Відправка...' : 'Надіслати купон користувачу'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Attachment Fullscreen Lightbox Modal */}
+      {previewAttachmentUrl && (
+        <div 
+          onClick={() => setPreviewAttachmentUrl(null)}
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in"
+        >
+          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+            <button
+              onClick={() => setPreviewAttachmentUrl(null)}
+              className="absolute -top-12 right-0 p-2 text-white hover:text-[#CC785C] transition-colors"
+              title="Закрити"
+            >
+              <X size={24} />
+            </button>
+            <img 
+              src={previewAttachmentUrl} 
+              alt="Квитанція повний розмір" 
+              className="max-h-[85vh] max-w-full rounded-2xl object-contain border border-[#363430] shadow-2xl" 
+            />
+          </div>
+        </div>
       )}
 
     </div>

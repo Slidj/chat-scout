@@ -338,3 +338,54 @@
   50% { opacity: 0.15; }
 }
 
+/* Animated Coupon Envelope: smooth color cycle (White -> Orange -> Red -> Orange -> White) + gentle wiggle */
+@keyframes envelope-glow-cycle {
+  0% {
+    color: #FFFFFF;
+    filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.75));
+  }
+  25% {
+    color: #F97316;
+    filter: drop-shadow(0 0 9px rgba(249, 115, 22, 0.8));
+  }
+  50% {
+    color: #EF4444;
+    filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.85));
+  }
+  75% {
+    color: #F97316;
+    filter: drop-shadow(0 0 9px rgba(249, 115, 22, 0.8));
+  }
+  100% {
+    color: #FFFFFF;
+    filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.75));
+  }
+}
+
+@keyframes envelope-wiggle {
+  0%, 100% {
+    transform: rotate(0deg) scale(1);
+  }
+  15% {
+    transform: rotate(-7deg) scale(1.08);
+  }
+  30% {
+    transform: rotate(6deg) scale(1.08);
+  }
+  45% {
+    transform: rotate(-4deg) scale(1.05);
+  }
+  60% {
+    transform: rotate(3deg) scale(1.03);
+  }
+  75% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+.animate-envelope-pulse {
+  animation: envelope-glow-cycle 4s ease-in-out infinite, envelope-wiggle 3s ease-in-out infinite;
+  transform-origin: center;
+}
+
+

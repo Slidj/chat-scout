@@ -1,14 +1,20 @@
 import { useState, useEffect } from 'react';
 import { 
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
-  Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight
+  Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
+  Wallet, Mail, Gift, CreditCard
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
 import { AdminPanel } from './components/AdminPanel';
+import { TopupModal } from './components/TopupModal';
+import { CouponCardModal } from './components/CouponCardModal';
 import { Provider, AiModel } from './types';
 import { fetchModels, Model } from './lib/api';
-import { getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId } from './lib/db';
+import { 
+  getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
+  TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups 
+} from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
 declare global {
@@ -26,6 +32,12 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // Topup & Coupons State
+  const [isTopupModalOpen, setIsTopupModalOpen] = useState(false);
+  const [isCouponModalOpen, setIsCouponModalOpen] = useState(false);
+  const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
+  const [allUserTopups, setAllUserTopups] = useState<TopupRequest[]>([]);
   
   // Data State
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -131,13 +143,33 @@ export default function App() {
       });
     }
 
+    // Subscribe to current user's coupons and top-up requests
+    const activeUid = window.Telegram?.WebApp?.initDataUnsafe?.user?.id 
+      ? String(window.Telegram.WebApp.initDataUnsafe.user.id) 
+      : getOrInitClientId();
+
+    const unsubCoupons = subscribeUserCoupons(activeUid, (coupons) => {
+      setUserCoupons(coupons);
+    });
+
+    const unsubTopups = subscribeToTopups((all) => {
+      setAllUserTopups(all.filter(t => t.userId === activeUid));
+    });
+
     if (window.location.search.includes('admin=true')) {
       isUserAdmin = true;
     }
 
     setIsAdmin(isUserAdmin);
     loadData();
+
+    return () => {
+      unsubCoupons();
+      unsubTopups();
+    };
   }, []);
+
+  const unreadCouponsCount = userCoupons.filter(c => !c.isRead).length;
 
   useEffect(() => {
     if (apiKey) {
@@ -265,7 +297,28 @@ export default function App() {
           </h1>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
+          {/* Animated Envelope for Topup / Admin Coupon notifications */}
+          {(userCoupons.length > 0 || unreadCouponsCount > 0) && (
+            <button
+              onClick={() => setIsCouponModalOpen(true)}
+              className={`relative p-2 rounded-full transition-all ${
+                unreadCouponsCount > 0 
+                  ? 'animate-envelope-pulse ring-1 ring-amber-500/40 bg-[#25201A]' 
+                  : 'text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#252421]'
+              }`}
+              title={unreadCouponsCount > 0 ? "Вам надіслано новий купон на поповнення!" : "Мої купони"}
+            >
+              <Mail size={20} className={unreadCouponsCount > 0 ? 'stroke-[2.2]' : ''} />
+              {unreadCouponsCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border border-[#181715]"></span>
+                </span>
+              )}
+            </button>
+          )}
+
           {isAdmin && (
             <button
               onClick={() => setIsAdminOpen(true)}
@@ -631,6 +684,46 @@ export default function App() {
                 <span>Code</span>
               </div>
 
+              {/* Top-up Balance Item */}
+              <div 
+                onClick={() => { setIsTopupModalOpen(true); setIsDrawerOpen(false); }}
+                className="flex items-center justify-between px-3.5 py-2.5 rounded-2xl cursor-pointer transition-all text-sm font-medium text-[#ECE8E1] bg-[#22201D] hover:bg-[#2A2824] border border-[#3A352F] hover:border-[#CC785C]/50 group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-6 h-6 rounded-lg bg-[#3D291F] text-[#CC785C] flex items-center justify-center">
+                    <Wallet size={14} />
+                  </div>
+                  <span className="group-hover:text-[#FAF8F5]">Поповнити баланс</span>
+                </div>
+                <span className="text-[10px] font-semibold text-[#CC785C] bg-[#34241B] px-2 py-0.5 rounded-full border border-[#523425]">
+                  ₴ Карта
+                </span>
+              </div>
+
+              {/* User Coupons Item */}
+              {userCoupons.length > 0 && (
+                <div 
+                  onClick={() => { setIsCouponModalOpen(true); setIsDrawerOpen(false); }}
+                  className="flex items-center justify-between px-3.5 py-2.5 rounded-2xl cursor-pointer transition-all text-sm font-medium text-[#ECE8E1] hover:bg-[#242320] group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-6 h-6 rounded-lg bg-[#3C321E] text-amber-400 flex items-center justify-center">
+                      <Gift size={14} />
+                    </div>
+                    <span>Мої купони</span>
+                  </div>
+                  {unreadCouponsCount > 0 ? (
+                    <span className="text-[10px] font-bold text-white bg-red-500 px-2 py-0.5 rounded-full animate-pulse shadow-sm">
+                      +{unreadCouponsCount} нові
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-medium text-[#8A8780] bg-[#252421] px-2 py-0.5 rounded-full">
+                      {userCoupons.length}
+                    </span>
+                  )}
+                </div>
+              )}
+
               {isAdmin && (
                 <div 
                   onClick={() => { setIsAdminOpen(true); setIsDrawerOpen(false); }}
@@ -702,6 +795,8 @@ export default function App() {
         onChangeModel={setActiveChatModelId}
         apiModels={enrichedChatModels}
         currentUser={tgUser}
+        unreadCouponsCount={unreadCouponsCount}
+        onOpenCoupons={() => setIsCouponModalOpen(true)}
       />
 
       {/* Settings Modal */}
@@ -710,6 +805,22 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         currentApiKey={apiKey}
         onSave={handleSaveApiKey}
+      />
+
+      {/* Topup Request Modal */}
+      <TopupModal
+        isOpen={isTopupModalOpen}
+        onClose={() => setIsTopupModalOpen(false)}
+        currentUser={tgUser}
+        userRequests={allUserTopups}
+      />
+
+      {/* Coupon Digital Card Modal */}
+      <CouponCardModal
+        isOpen={isCouponModalOpen}
+        onClose={() => setIsCouponModalOpen(false)}
+        coupons={userCoupons}
+        onStartChat={handleStartNewChat}
       />
 
       {/* Admin Panel */}
