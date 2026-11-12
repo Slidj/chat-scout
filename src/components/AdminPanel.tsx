@@ -6,10 +6,12 @@ import {
   deleteUser, toggleBlockUser,
   AppUser, ActivityEvent, QueryLog, logActivityEvent,
   TopupRequest, subscribeToTopups, updateTopupStatus, sendCouponToUser,
-  subscribePaymentSettings, updatePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS
+  subscribePaymentSettings, updatePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS,
+  subscribePreloaderSettings, updatePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
 } from '../lib/db';
 import { fetchModels } from '../lib/api';
 import { Provider, AiModel } from '../types';
+import { AppPreloader } from './AppPreloader';
 import { 
   Plus, Edit2, Edit3, Trash2, X, Upload, Check, Palette, Shield, 
   LayoutDashboard, Building2, Cpu, Key, Users, Menu, TrendingUp, 
@@ -17,11 +19,12 @@ import {
   Sparkles, CheckCircle2, AlertCircle, BarChart3, Globe, Zap,
   UserCheck, ArrowUpRight, Copy, Ban, Unlock, ChevronLeft,
   ChevronsLeft, ChevronsRight, Info, CreditCard, Gift, Send,
-  ExternalLink, FileText, Image as ImageIcon, CheckCircle, XCircle
+  ExternalLink, FileText, Image as ImageIcon, CheckCircle, XCircle,
+  Film, Play, Waves, Sliders, Volume2, MonitorPlay
 } from 'lucide-react';
 import { resolveColorToHex, COLOR_PRESETS, ColorPreset, resizeImageFile, getTierClasses } from '../lib/utils';
 
-type AdminTab = 'dashboard' | 'providers' | 'models' | 'api-keys' | 'users' | 'topups';
+type AdminTab = 'dashboard' | 'providers' | 'models' | 'api-keys' | 'users' | 'topups' | 'preloader';
 type DrillDownModal = null | 'all_users' | 'active_today' | 'queries_detail' | 'models_overview' | 'chart_point' | 'provider_detail';
 
 interface AdminPanelProps {
@@ -63,6 +66,22 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [cardFormNote, setCardFormNote] = useState('');
   const [isSavingCard, setIsSavingCard] = useState(false);
   const [cardSaveSuccess, setCardSaveSuccess] = useState(false);
+
+  // Dynamic Custom Preloader & Video/GIF Splash Settings State
+  const [preloaderSettings, setPreloaderSettings] = useState<PreloaderSettings>(DEFAULT_PRELOADER_SETTINGS);
+  const [preloaderEnabled, setPreloaderEnabled] = useState(true);
+  const [preloaderMediaType, setPreloaderMediaType] = useState<'video' | 'gif' | 'image' | 'none'>('none');
+  const [preloaderMediaUrl, setPreloaderMediaUrl] = useState('');
+  const [preloaderDuration, setPreloaderDuration] = useState(15);
+  const [preloaderTitle, setPreloaderTitle] = useState('');
+  const [preloaderSubtext, setPreloaderSubtext] = useState('');
+  const [preloaderAllowSkip, setPreloaderAllowSkip] = useState(true);
+  const [preloaderSecondaryImage, setPreloaderSecondaryImage] = useState('');
+  const [preloaderSecondaryDuration, setPreloaderSecondaryDuration] = useState(3);
+  const [preloaderSecondaryText, setPreloaderSecondaryText] = useState('Завантаження застосунку...');
+  const [isSavingPreloader, setIsSavingPreloader] = useState(false);
+  const [preloaderSaveSuccess, setPreloaderSaveSuccess] = useState(false);
+  const [adminTestingPreloader, setAdminTestingPreloader] = useState(false);
 
   // Drill-down Modal State (Clickable Cards & Stats)
   const [drillModal, setDrillModal] = useState<DrillDownModal>(null);
@@ -136,6 +155,19 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       setCardFormRecipient(settings.recipientName || '');
       setCardFormNote(settings.note || '');
     });
+    const unsubPreloader = subscribePreloaderSettings((settings) => {
+      setPreloaderSettings(settings);
+      setPreloaderEnabled(settings.isEnabled);
+      setPreloaderMediaType(settings.mediaType);
+      setPreloaderMediaUrl(settings.mediaUrl || '');
+      setPreloaderDuration(settings.durationSeconds || 15);
+      setPreloaderTitle(settings.title || '');
+      setPreloaderSubtext(settings.subtext || '');
+      setPreloaderAllowSkip(settings.allowSkip ?? true);
+      setPreloaderSecondaryImage(settings.secondaryImageUrl || '');
+      setPreloaderSecondaryDuration(settings.secondaryDurationSeconds || 3);
+      setPreloaderSecondaryText(settings.secondaryText || 'Завантаження застосунку...');
+    });
 
     return () => {
       unsubUsers();
@@ -143,6 +175,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       unsubActivities();
       unsubTopups();
       unsubPayment();
+      unsubPreloader();
     };
   }, []);
 
@@ -549,9 +582,88 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     }
   };
 
+  const handleSavePreloaderConfig = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSavingPreloader(true);
+    try {
+      await updatePreloaderSettings({
+        isEnabled: preloaderEnabled,
+        mediaType: preloaderMediaType,
+        mediaUrl: preloaderMediaUrl.trim(),
+        durationSeconds: Number(preloaderDuration) || 15,
+        title: preloaderTitle.trim() || undefined,
+        subtext: preloaderSubtext.trim() || undefined,
+        allowSkip: preloaderAllowSkip,
+        secondaryImageUrl: preloaderSecondaryImage.trim() || undefined,
+        secondaryDurationSeconds: Number(preloaderSecondaryDuration) || 3,
+        secondaryText: preloaderSecondaryText.trim() || 'Завантаження застосунку...'
+      }, currentUser?.first_name || currentUser?.username || 'Admin');
+      setPreloaderSaveSuccess(true);
+      setTimeout(() => setPreloaderSaveSuccess(false), 3500);
+    } catch (err: any) {
+      alert('Помилка збереження налаштувань прелоадера: ' + err.message);
+    } finally {
+      setIsSavingPreloader(false);
+    }
+  };
+
+  const handleResetPreloaderVersion = async () => {
+    const isConfirmed = window.confirm(
+      'Оновити версію відео-заставки для всіх? Це змусить абсолютно всіх користувачів побачити це відео знову при наступному відкритті застосунку (навіть якщо вони вже бачили попереднє).'
+    );
+    if (!isConfirmed) return;
+
+    setIsSavingPreloader(true);
+    try {
+      const newVersionId = `holiday_${Date.now()}`;
+      await updatePreloaderSettings({
+        versionId: newVersionId
+      }, currentUser?.first_name || currentUser?.username || 'Admin');
+      alert(`Версію оновлено (${newVersionId})! Усі користувачі побачать це відео знову при наступному вході.`);
+    } catch (err: any) {
+      alert('Помилка оновлення версії: ' + err.message);
+    } finally {
+      setIsSavingPreloader(false);
+    }
+  };
+
+  const handlePreloaderFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type.startsWith('video/')) {
+      setPreloaderMediaType('video');
+    } else if (file.type === 'image/gif') {
+      setPreloaderMediaType('gif');
+    } else if (file.type.startsWith('image/')) {
+      setPreloaderMediaType('image');
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setPreloaderMediaUrl(event.target.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSecondaryImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setPreloaderSecondaryImage(event.target.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const navItems = [
     { id: 'dashboard' as AdminTab, label: 'Дашборд', icon: LayoutDashboard, badge: null, desc: 'Жива статистика та аналітика' },
     { id: 'topups' as AdminTab, label: 'Поповнення & Купони', icon: CreditCard, badge: pendingTopupsCount > 0 ? pendingTopupsCount : null, desc: 'Перевірка чеків, видача купонів' },
+    { id: 'preloader' as AdminTab, label: 'Прелоадер & Заставка', icon: Film, badge: null, desc: 'Pinterest відео, GIF, хвиля' },
     { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти, блокування, сторінки' },
     { id: 'providers' as AdminTab, label: 'Постачальники', icon: Building2, badge: providers.length, desc: 'Бренди, кольори, лого' },
     { id: 'models' as AdminTab, label: 'ШІ Моделі', icon: Cpu, badge: models.length, desc: 'Каталог, API, RPG тарифи' },
@@ -2366,6 +2478,467 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
             </div>
           )}
 
+          {/* -------------------------------------------------------------
+              PRELOADER & VIDEO/GIF SPLASH TAB
+              ------------------------------------------------------------- */}
+          {activeTab === 'preloader' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              
+              {/* Header Banner */}
+              <div className="bg-[#242320] p-5 rounded-3xl border border-[#363430] flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Film size={22} className="text-[#CC785C]" />
+                    <h2 className="text-lg font-bold text-[#FAF8F5]">Прелоадер & Відео-заставка</h2>
+                    {preloaderEnabled ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950/70 text-emerald-300 font-semibold border border-emerald-800/50">
+                        Увімкнено
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-stone-800 text-stone-400 font-semibold">
+                        Вимкнено
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-[#8E8B83] mt-1">
+                    Керуйте святковими вертикальними відео (Pinterest / GIF), тривалістю показу та стильним хвильовим прелоадером
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTestingPreloader(true)}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2D2A26] hover:bg-[#383530] text-[#EDE9DF] rounded-xl text-xs font-semibold border border-[#444039] transition-all active:scale-95 shadow-xs"
+                    title="Побачити прелоадер так, як його бачить користувач"
+                  >
+                    <Play size={14} className="text-[#CC785C]" />
+                    <span>Тестовий перегляд</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetPreloaderVersion}
+                    disabled={isSavingPreloader}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2B231D] hover:bg-[#3B2D23] text-amber-300 hover:text-amber-200 rounded-xl text-xs font-semibold border border-amber-800/50 transition-all active:scale-95 shadow-xs"
+                    title="Скидає лічильник переглядів — усі користувачі побачать нове відео знову"
+                  >
+                    <RefreshCw size={14} className={isSavingPreloader ? 'animate-spin' : ''} />
+                    <span>Показати всім знову</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSavePreloaderConfig()}
+                    disabled={isSavingPreloader}
+                    className="flex items-center gap-1.5 px-5 py-2 bg-[#CC785C] hover:bg-[#D97757] text-white rounded-xl text-xs font-bold transition-all active:scale-95 shadow-md disabled:opacity-50"
+                  >
+                    <Check size={15} />
+                    <span>{isSavingPreloader ? 'Збереження...' : 'Зберегти'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Save Success Alert */}
+              {preloaderSaveSuccess && (
+                <div className="p-3.5 bg-emerald-950/70 border border-emerald-800/60 rounded-2xl text-xs text-emerald-300 flex items-center gap-2 animate-in fade-in">
+                  <CheckCircle2 size={16} />
+                  <span>Налаштування прелоадера успішно збережено в базі! Зміни активні для всіх користувачів.</span>
+                </div>
+              )}
+
+              {/* CARD 1: PRIMARY MEDIA (VIDEO / GIF) */}
+              <div className="bg-[#242320] p-5 sm:p-6 rounded-3xl border border-[#363430] space-y-5 shadow-sm">
+                <div className="flex items-center justify-between border-b border-[#33312D] pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-[#36271D] text-[#CC785C] flex items-center justify-center">
+                      <MonitorPlay size={18} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-[#FAF8F5]">
+                        Головна заставка (Перший показ або при зміні відео)
+                      </h3>
+                      <p className="text-xs text-[#8E8B83]">
+                        Відтворюється користувачу при першому відкритті або коли ви ставите нове святкове відео
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-xs text-[#8E8B83]">Активна</span>
+                    <input
+                      type="checkbox"
+                      checked={preloaderEnabled}
+                      onChange={(e) => setPreloaderEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded text-[#CC785C] focus:ring-[#CC785C] bg-[#1C1A17] border-[#3E3C36]"
+                    />
+                  </label>
+                </div>
+
+                {/* Media Type Radios */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-2">
+                    Тип медіа для заставки
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'video', label: 'Відео (Pinterest / MP4)', desc: 'Вертикальне або горизонтальне' },
+                      { id: 'gif', label: 'GIF Анімація', desc: 'Рухоме зображення' },
+                      { id: 'image', label: 'Фото / Банер', desc: 'Статичне зображення' },
+                      { id: 'none', label: 'Без відео', desc: 'Лише швидка хвиля (3с)' },
+                    ].map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setPreloaderMediaType(m.id as any)}
+                        className={`p-3 rounded-2xl border text-left transition-all ${
+                          preloaderMediaType === m.id
+                            ? 'bg-[#2E251E] border-[#CC785C] text-white shadow-xs ring-1 ring-[#CC785C]/40'
+                            : 'bg-[#1C1A17] border-[#363430] text-[#9E9A92] hover:text-[#ECE8E1] hover:border-[#4A4742]'
+                        }`}
+                      >
+                        <div className="font-semibold text-xs flex items-center justify-between">
+                          <span>{m.label}</span>
+                          {preloaderMediaType === m.id && <Check size={13} className="text-[#CC785C]" />}
+                        </div>
+                        <div className="text-[10px] text-[#7A7770] mt-0.5">{m.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Media URL & Upload if not 'none' */}
+                {preloaderMediaType !== 'none' && (
+                  <div className="space-y-4 pt-1">
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider">
+                          Посилання на медіа (URL) *
+                        </label>
+                        <label className="text-xs text-[#CC785C] hover:underline cursor-pointer flex items-center gap-1">
+                          <Upload size={12} />
+                          <span>Завантажити файл із пристрою</span>
+                          <input
+                            type="file"
+                            accept="video/mp4,video/webm,video/*,image/gif,image/jpeg,image/png,image/webp"
+                            onChange={handlePreloaderFileUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={preloaderMediaUrl}
+                        onChange={(e) => setPreloaderMediaUrl(e.target.value)}
+                        placeholder="https://... пряме посилання на mp4/webm з Pinterest, Tenor, Giphy або свій CDN"
+                        className="w-full px-3.5 py-2.5 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm font-mono text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                      />
+
+                      <div className="mt-2 p-2.5 bg-[#1C1B18] rounded-xl border border-[#35322D] text-[11px] text-[#A8A49C] leading-relaxed">
+                        💡 <strong className="text-white">Підтримка Pinterest та вертикальних відео:</strong> ви можете вставляти пряме посилання на відео будь-якої орієнтації. Завдяки нашому розумному дзеркальному розмиттю (ambient blur) бічні смуги заповнюються м'яким живим кольором відео, а саме відео відображається повністю <strong className="text-[#CC785C]">без жодного обрізання</strong>.
+                      </div>
+                    </div>
+
+                    {/* Duration Controls */}
+                    <div className="p-4 bg-[#1C1A17] border border-[#33312D] rounded-2xl space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-[#FAF8F5] flex items-center gap-1.5">
+                          <Clock size={14} className="text-[#CC785C]" />
+                          <span>Тривалість заставки:</span>
+                        </label>
+                        <div className="flex items-center gap-1 text-sm font-bold text-amber-300 font-mono">
+                          <span>{preloaderDuration}</span>
+                          <span className="text-xs text-[#8E8B83]">сек.</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="3"
+                          max="60"
+                          step="1"
+                          value={preloaderDuration}
+                          onChange={(e) => setPreloaderDuration(Number(e.target.value))}
+                          className="flex-1 accent-[#CC785C] cursor-pointer"
+                        />
+                        <input
+                          type="number"
+                          min="3"
+                          max="120"
+                          value={preloaderDuration}
+                          onChange={(e) => setPreloaderDuration(Number(e.target.value))}
+                          className="w-16 px-2 py-1 bg-[#252320] border border-[#3D3B36] rounded-lg text-xs font-mono text-center text-[#FAF8F5]"
+                        />
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <span className="text-[10px] text-[#7A7770]">Швидкий вибір:</span>
+                        {[10, 15, 20, 30, 45, 60].map((sec) => (
+                          <button
+                            key={sec}
+                            type="button"
+                            onClick={() => setPreloaderDuration(sec)}
+                            className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-colors ${
+                              preloaderDuration === sec
+                                ? 'bg-[#CC785C] text-white'
+                                : 'bg-[#292723] text-[#8E8B83] hover:text-[#EDE9DF]'
+                            }`}
+                          >
+                            {sec}с
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Thematic Greeting Titles */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                          Заголовок / Привітання
+                        </label>
+                        <input
+                          type="text"
+                          value={preloaderTitle}
+                          onChange={(e) => setPreloaderTitle(e.target.value)}
+                          placeholder="напр. Зі святом! або AI Studio"
+                          className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                          Підзаголовок
+                        </label>
+                        <input
+                          type="text"
+                          value={preloaderSubtext}
+                          onChange={(e) => setPreloaderSubtext(e.target.value)}
+                          placeholder="напр. Підключення нейромереж..."
+                          className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Allow Skip Checkbox */}
+                    <div className="flex items-center justify-between p-3 bg-[#1C1A17] rounded-xl border border-[#33312D]">
+                      <div>
+                        <div className="text-xs font-semibold text-[#FAF8F5]">
+                          Кнопка «Пропустити» (Skip)
+                        </div>
+                        <div className="text-[11px] text-[#8E8B83]">
+                          Дозволяє користувачеві в будь-який момент натиснути «Пропустити» і перейти в застосунок
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={preloaderAllowSkip}
+                        onChange={(e) => setPreloaderAllowSkip(e.target.checked)}
+                        className="w-4 h-4 rounded text-[#CC785C] focus:ring-[#CC785C] bg-[#252320] border-[#3E3C36]"
+                      />
+                    </div>
+
+                    {/* In-Panel Live Preview Box */}
+                    {preloaderMediaUrl && (
+                      <div className="space-y-1.5 pt-2">
+                        <div className="text-xs font-semibold text-[#8E8B83] flex items-center gap-1.5">
+                          <Eye size={13} className="text-[#CC785C]" />
+                          <span>Попередній перегляд медіа (із дзеркальним розмиттям фону):</span>
+                        </div>
+                        <div className="relative h-64 sm:h-80 rounded-2xl overflow-hidden border border-[#3D3A34] bg-black flex items-center justify-center">
+                          {preloaderMediaType === 'video' ? (
+                            <>
+                              <video
+                                src={preloaderMediaUrl}
+                                autoPlay
+                                playsInline
+                                muted
+                                loop
+                                className="absolute inset-0 w-full h-full object-cover blur-xl scale-125 opacity-40 pointer-events-none"
+                              />
+                              <video
+                                src={preloaderMediaUrl}
+                                autoPlay
+                                playsInline
+                                muted
+                                loop
+                                controls
+                                className="relative z-10 w-full h-full object-contain max-h-full"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <img
+                                src={preloaderMediaUrl}
+                                alt="Preview"
+                                className="absolute inset-0 w-full h-full object-cover blur-xl scale-125 opacity-40 pointer-events-none"
+                              />
+                              <img
+                                src={preloaderMediaUrl}
+                                alt="Preview"
+                                className="relative z-10 w-full h-full object-contain max-h-full"
+                              />
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
+
+              {/* CARD 2: SECONDARY PRELOADER WITH STYLIZED HARMONIC WAVE */}
+              <div className="bg-[#242320] p-5 sm:p-6 rounded-3xl border border-[#363430] space-y-5 shadow-sm">
+                <div className="flex items-center gap-2.5 border-b border-[#33312D] pb-3">
+                  <div className="w-8 h-8 rounded-xl bg-[#282E22] text-emerald-400 flex items-center justify-center">
+                    <Waves size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#FAF8F5]">
+                      Вторинний прелоадер (Для тих, хто вже бачив відео)
+                    </h3>
+                    <p className="text-xs text-[#8E8B83]">
+                      Показується користувачам при повторних відкриттях: швидка заставка (3 сек) зі стильною гармонійною хвилею
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Secondary settings */}
+                  <div className="space-y-3.5">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider">
+                          Зображення або логотип
+                        </label>
+                        <label className="text-xs text-[#CC785C] hover:underline cursor-pointer flex items-center gap-1">
+                          <Upload size={12} />
+                          <span>Завантажити фото</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleSecondaryImageUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                      <input
+                        type="text"
+                        value={preloaderSecondaryImage}
+                        onChange={(e) => setPreloaderSecondaryImage(e.target.value)}
+                        placeholder="URL зображення (якщо пусто — фірмова зірка)"
+                        className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-xs text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider">
+                          Тривалість вторинного показу: {preloaderSecondaryDuration} сек.
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="1"
+                          max="6"
+                          step="0.5"
+                          value={preloaderSecondaryDuration}
+                          onChange={(e) => setPreloaderSecondaryDuration(Number(e.target.value))}
+                          className="flex-1 accent-[#CC785C] cursor-pointer"
+                        />
+                        <div className="text-xs font-mono font-bold text-[#FAF8F5] w-10 text-right">
+                          {preloaderSecondaryDuration}с
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1">
+                        Текст під хвилею
+                      </label>
+                      <input
+                        type="text"
+                        value={preloaderSecondaryText}
+                        onChange={(e) => setPreloaderSecondaryText(e.target.value)}
+                        placeholder="Завантаження застосунку..."
+                        className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-xs text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Interactive Wave Equalizer Demo */}
+                  <div className="bg-[#1C1A17] border border-[#35322D] rounded-2xl p-4 flex flex-col items-center justify-center text-center space-y-3">
+                    <div className="text-[11px] font-semibold text-[#8E8B83] uppercase tracking-wider">
+                      Жива стильна хвиля (Демо)
+                    </div>
+
+                    {/* Logo/Image Preview */}
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#3D261B] to-[#1C1814] border border-[#5A382A] text-[#CC785C] flex items-center justify-center shadow-lg overflow-hidden">
+                      {preloaderSecondaryImage ? (
+                        <img src={preloaderSecondaryImage} alt="Logo" className="w-full h-full object-contain p-1" />
+                      ) : (
+                        <Sparkles size={24} className="text-[#CC785C]" />
+                      )}
+                    </div>
+
+                    {/* 9 Pulsating Harmonic Wave Bars */}
+                    <div className="flex items-center justify-center gap-1.5 h-10 px-3 py-1.5 rounded-xl bg-[#24221E] border border-[#38342D]">
+                      {[0, 0.15, 0.3, 0.45, 0.6, 0.45, 0.3, 0.15, 0].map((delay, idx) => {
+                        const heights = [30, 50, 75, 95, 100, 90, 65, 45, 25];
+                        return (
+                          <div
+                            key={idx}
+                            className="w-1.5 rounded-full bg-gradient-to-t from-[#CC785C] via-amber-400 to-[#FAF8F5] animate-wave-bar"
+                            style={{
+                              height: `${heights[idx]}%`,
+                              animationDelay: `${delay}s`,
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    <div className="text-[11px] text-[#A8A49C]">
+                      «{preloaderSecondaryText || 'Завантаження застосунку...'}»
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* CARD 3: AUDIENCE & VERSION RESET */}
+              <div className="bg-[#242320] p-5 rounded-3xl border border-[#363430] flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+                <div>
+                  <div className="text-xs uppercase font-bold text-[#8E8B83] tracking-wider mb-0.5">
+                    Поточна версія відео-заставки
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-bold text-amber-300">
+                      {preloaderSettings.versionId || 'v1_init'}
+                    </span>
+                    <span className="text-xs text-[#8E8B83]">
+                      (Користувачі, які вже бачили цю версію, дивляться коротку хвилю)
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleResetPreloaderVersion}
+                  disabled={isSavingPreloader}
+                  className="px-4 py-2.5 bg-gradient-to-r from-amber-600/30 to-[#CC785C]/30 hover:from-amber-600/50 hover:to-[#CC785C]/50 text-amber-300 border border-amber-600/50 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-sm flex items-center justify-center gap-2 shrink-0"
+                >
+                  <RefreshCw size={14} className={isSavingPreloader ? 'animate-spin' : ''} />
+                  <span>Показати нове відео всім знову</span>
+                </button>
+              </div>
+
+            </div>
+          )}
+
         </main>
       </div>
 
@@ -2903,6 +3476,27 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
             />
           </div>
         </div>
+      )}
+
+      {/* Admin Testing Preloader Fullscreen Preview */}
+      {adminTestingPreloader && (
+        <AppPreloader
+          settings={{
+            isEnabled: true,
+            mediaType: preloaderMediaType,
+            mediaUrl: preloaderMediaUrl,
+            durationSeconds: Number(preloaderDuration) || 15,
+            versionId: 'admin_test_preview',
+            title: preloaderTitle,
+            subtext: preloaderSubtext,
+            allowSkip: preloaderAllowSkip,
+            secondaryImageUrl: preloaderSecondaryImage,
+            secondaryDurationSeconds: Number(preloaderSecondaryDuration) || 3,
+            secondaryText: preloaderSecondaryText
+          }}
+          isPreviewMode={true}
+          onFinished={() => setAdminTestingPreloader(false)}
+        />
       )}
 
     </div>

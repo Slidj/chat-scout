@@ -658,5 +658,92 @@ export const subscribePaymentSettings = (
   });
 };
 
+// -------------------------------------------------------------
+// Dynamic Custom Preloader & Video/GIF Splash Settings
+// -------------------------------------------------------------
+export interface PreloaderSettings {
+  isEnabled: boolean;
+  // Primary (Featured) media: Video or GIF
+  mediaType: 'video' | 'gif' | 'image' | 'none';
+  mediaUrl: string; // URL (mp4, webm, gif, etc.) or base64
+  mediaPosterUrl?: string; // Optional poster image
+  durationSeconds: number; // e.g. 10, 15, 30, 50s
+  versionId: string; // Timestamp or hash identifying this video campaign; when changed, all users see the new video
+  title?: string;
+  subtext?: string;
+  allowSkip: boolean;
+  
+  // Secondary (Return visitor) preloader with stylish wave
+  secondaryImageUrl?: string;
+  secondaryDurationSeconds: number; // 2, 3, 5s
+  secondaryText?: string;
+
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export const DEFAULT_PRELOADER_SETTINGS: PreloaderSettings = {
+  isEnabled: true,
+  mediaType: 'none',
+  mediaUrl: '',
+  mediaPosterUrl: '',
+  durationSeconds: 15,
+  versionId: 'v1_init',
+  title: 'AI Studio Chats',
+  subtext: 'Підключення передових моделей штучного інтелекту...',
+  allowSkip: true,
+  secondaryImageUrl: '',
+  secondaryDurationSeconds: 3,
+  secondaryText: 'Завантаження застосунку...'
+};
+
+export const getPreloaderSettings = async (): Promise<PreloaderSettings> => {
+  try {
+    const docSnap = await getDoc(doc(db, 'settings', 'preloader'));
+    if (docSnap.exists()) {
+      return { ...DEFAULT_PRELOADER_SETTINGS, ...docSnap.data() } as PreloaderSettings;
+    }
+    return DEFAULT_PRELOADER_SETTINGS;
+  } catch (e) {
+    console.warn('Error reading preloader settings:', e);
+    return DEFAULT_PRELOADER_SETTINGS;
+  }
+};
+
+export const updatePreloaderSettings = async (
+  settings: Partial<PreloaderSettings>,
+  adminName?: string
+): Promise<void> => {
+  const ref = doc(db, 'settings', 'preloader');
+  const now = new Date().toISOString();
+  await setDoc(ref, {
+    ...settings,
+    updatedAt: now,
+    updatedBy: adminName || 'Admin'
+  }, { merge: true });
+
+  await logActivityEvent({
+    type: 'admin_action',
+    description: `Оновлено прелоадер (тип: ${settings.mediaType || 'налаштування'}, тривалість: ${settings.durationSeconds ?? 'звичайна'}с)`,
+    user: adminName || 'Admin'
+  }).catch(console.warn);
+};
+
+export const subscribePreloaderSettings = (
+  callback: (settings: PreloaderSettings) => void
+): Unsubscribe => {
+  const ref = doc(db, 'settings', 'preloader');
+  return onSnapshot(ref, (docSnap) => {
+    if (docSnap.exists()) {
+      callback({ ...DEFAULT_PRELOADER_SETTINGS, ...docSnap.data() } as PreloaderSettings);
+    } else {
+      callback(DEFAULT_PRELOADER_SETTINGS);
+    }
+  }, (err) => {
+    console.warn('Preloader settings subscription error:', err);
+    callback(DEFAULT_PRELOADER_SETTINGS);
+  });
+};
+
 
 

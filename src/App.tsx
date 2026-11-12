@@ -9,11 +9,13 @@ import { ChatPanel } from './components/ChatPanel';
 import { AdminPanel } from './components/AdminPanel';
 import { TopupModal } from './components/TopupModal';
 import { CouponCardModal } from './components/CouponCardModal';
+import { AppPreloader } from './components/AppPreloader';
 import { Provider, AiModel } from './types';
 import { fetchModels, Model } from './lib/api';
 import { 
   getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
-  TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups 
+  TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups,
+  subscribePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
 } from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
@@ -38,6 +40,10 @@ export default function App() {
   const [isCouponModalOpen, setIsCouponModalOpen] = useState(false);
   const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
   const [allUserTopups, setAllUserTopups] = useState<TopupRequest[]>([]);
+
+  // Preloader State
+  const [preloaderSettings, setPreloaderSettings] = useState<PreloaderSettings>(DEFAULT_PRELOADER_SETTINGS);
+  const [isPreloaderActive, setIsPreloaderActive] = useState<boolean>(true);
   
   // Data State
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -156,6 +162,13 @@ export default function App() {
       setAllUserTopups(all.filter(t => t.userId === activeUid));
     });
 
+    const unsubPreloader = subscribePreloaderSettings((settings) => {
+      setPreloaderSettings(settings);
+      if (!settings.isEnabled) {
+        setIsPreloaderActive(false);
+      }
+    });
+
     if (window.location.search.includes('admin=true')) {
       isUserAdmin = true;
     }
@@ -166,6 +179,7 @@ export default function App() {
     return () => {
       unsubCoupons();
       unsubTopups();
+      unsubPreloader();
     };
   }, []);
 
@@ -264,6 +278,14 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#171614] text-[#ECE8E1] font-sans pb-24 selection:bg-[#CC785C]/30 selection:text-white">
       
+      {/* App Preloader (Video/GIF for 1st visit / new video, Harmonic Wave for repeat visits) */}
+      {isPreloaderActive && (
+        <AppPreloader
+          settings={preloaderSettings}
+          onFinished={() => setIsPreloaderActive(false)}
+        />
+      )}
+
       {/* Claude Mobile Top App Bar (Screenshot 2) */}
       <header 
         className="sticky top-0 z-30 flex items-center justify-between px-4 pb-3 bg-[#171614]/90 backdrop-blur-md border-b border-[#2C2A26]"

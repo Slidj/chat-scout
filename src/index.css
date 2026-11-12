@@ -388,4 +388,38 @@
   transform-origin: center;
 }
 
+/* Stylized Preloader Harmonic Wave Animations */
+@keyframes preloader-wave-bar {
+  0%, 100% {
+    transform: scaleY(0.25);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(204, 120, 92, 0.75));
+  }
+}
+
+.animate-wave-bar {
+  animation: preloader-wave-bar 1.35s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes preloader-glow-breathe {
+  0%, 100% {
+    transform: scale(0.97);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+    filter: drop-shadow(0 0 30px rgba(204, 120, 92, 0.5));
+  }
+}
+
+.animate-glow-breathe {
+  animation: preloader-glow-breathe 2.5s ease-in-out infinite;
+}
+
 
