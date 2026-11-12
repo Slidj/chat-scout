@@ -636,20 +636,42 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       return;
     }
 
+    // Auto-detect video if URL contains mp4 / pinimg
+    const cleanUrl = preloaderMediaUrl.trim();
+    let finalType = preloaderMediaType;
+    if (cleanUrl) {
+      if (cleanUrl.includes('.mp4') || cleanUrl.includes('.webm') || cleanUrl.includes('pinimg.com')) {
+        finalType = 'video';
+      } else if (finalType === 'none') {
+        finalType = 'image';
+      }
+    }
+
+    // Automatically generate a fresh version ID on every save so ALL users (and admin) immediately see the new video!
+    const freshVersionId = `v_${Date.now()}`;
+
     setIsSavingPreloader(true);
     try {
       await updatePreloaderSettings({
         isEnabled: preloaderEnabled,
-        mediaType: preloaderMediaType,
-        mediaUrl: preloaderMediaUrl.trim(),
+        mediaType: finalType,
+        mediaUrl: cleanUrl,
         durationSeconds: Number(preloaderDuration) || 15,
         title: preloaderTitle.trim(),
         subtext: preloaderSubtext.trim(),
         allowSkip: preloaderAllowSkip,
         secondaryImageUrl: preloaderSecondaryImage.trim(),
         secondaryDurationSeconds: Number(preloaderSecondaryDuration) || 3,
-        secondaryText: preloaderSecondaryText.trim() || 'Завантаження застосунку...'
+        secondaryText: preloaderSecondaryText.trim() || 'Завантаження застосунку...',
+        versionId: freshVersionId
       }, currentUser?.first_name || currentUser?.username || 'Admin');
+
+      // Clear local seen state for this new version so admin sees the new video campaign right away
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(`seen_preloader_version_${freshVersionId}`);
+      }
+
+      setPreloaderMediaType(finalType);
       setPreloaderSaveSuccess(true);
       setTimeout(() => setPreloaderSaveSuccess(false), 3500);
     } catch (err: any) {

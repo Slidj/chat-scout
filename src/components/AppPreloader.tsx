@@ -18,21 +18,54 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
     return null;
   }
 
-  const hasSeenVersion = !isPreviewMode && typeof window !== 'undefined' 
+  // Auto-detect effective media type from URL if settings.mediaType was unset or 'none'
+  const rawUrl = settings.mediaUrl?.trim() || '';
+  const isVideoUrl = rawUrl.includes('.mp4') || rawUrl.includes('.webm') || rawUrl.includes('pinimg.com') || settings.mediaType === 'video';
+  const effectiveMediaType: 'video' | 'gif' | 'image' | 'none' = rawUrl
+    ? (isVideoUrl ? 'video' : (settings.mediaType !== 'none' ? settings.mediaType : 'image'))
+    : 'none';
+
+  const hasPrimaryMedia = effectiveMediaType !== 'none' && Boolean(rawUrl);
+
+  const hasSeenVersion = !isPreviewMode && typeof window !== 'undefined' && settings.versionId
     ? localStorage.getItem(`seen_preloader_version_${settings.versionId}`) === 'true'
     : false;
 
-  const hasPrimaryMedia = settings.mediaType !== 'none' && Boolean(settings.mediaUrl?.trim());
-
   // If user hasn't seen this version yet AND primary media exists -> show primary video/gif!
   // Otherwise -> show quick secondary preloader with stylish harmonic wave!
-  const initialMode: 'primary' | 'secondary' = hasPrimaryMedia && (!hasSeenVersion || isPreviewMode)
+  const initialMode: 'primary' | 'secondary' = (hasPrimaryMedia && (!hasSeenVersion || isPreviewMode))
     ? 'primary'
     : 'secondary';
 
   const [mode, setMode] = useState<'primary' | 'secondary'>(initialMode);
   const [isFadingOut, setIsFadingOut] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+
+  // Sync mode if settings change dynamically
+  useEffect(() => {
+    if (hasPrimaryMedia && (!hasSeenVersion || isPreviewMode)) {
+      setMode('primary');
+    }
+  }, [settings.versionId, settings.mediaUrl, isPreviewMode]);
+
+  // Force video element playback on mount / mode switch
+  const videoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (mode === 'primary' && effectiveMediaType === 'video' && videoRef.current) {
+      videoRef.current.muted = isMuted;
+      const playPromise = videoRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('Autoplay with sound prevented, switching to muted play:', err);
+          if (videoRef.current) {
+            videoRef.current.muted = true;
+            setIsMuted(true);
+            videoRef.current.play().catch((e) => console.warn('Muted autoplay also prevented:', e));
+          }
+        });
+      }
+    }
+  }, [mode, isMuted, settings.mediaUrl, effectiveMediaType]);
   
   // Progress & Timers
   const totalDuration = mode === 'primary' 
@@ -40,11 +73,10 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
     : Math.max(1.5, settings.secondaryDurationSeconds || 3);
 
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   // Mark as seen and exit
   const handleComplete = () => {
-    if (mode === 'primary' && !isPreviewMode) {
+    if (mode === 'primary' && !isPreviewMode && settings.versionId) {
       localStorage.setItem(`seen_preloader_version_${settings.versionId}`, 'true');
     }
     setIsFadingOut(true);
@@ -99,7 +131,7 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
           {/* Media Viewport with Pinterest-friendly Ambient Blurred Backdrop */}
           <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black">
             {/* Ambient Blurred Background (fills side bars with smooth dynamic colors of the video) */}
-            {settings.mediaType === 'video' ? (
+            {effectiveMediaType === 'video' ? (
               <video
                 src={settings.mediaUrl}
                 autoPlay
@@ -117,7 +149,7 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
             )}
 
             {/* Crisp Uncropped Foreground Media (Perfect 100% full view for Pinterest vertical videos) */}
-            {settings.mediaType === 'video' ? (
+            {effectiveMediaType === 'video' ? (
               <video
                 ref={videoRef}
                 src={settings.mediaUrl}
@@ -127,8 +159,8 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
                 muted={isMuted}
                 loop={false}
                 onEnded={handleComplete}
-                onError={() => {
-                  console.warn('Preloader video failed to load, switching to secondary preloader');
+                onError={(err) => {
+                  console.warn('Preloader video failed to load, switching to secondary preloader', err);
                   setMode('secondary');
                 }}
                 className="relative z-10 w-full h-full object-contain max-w-full max-h-full drop-shadow-2xl"
