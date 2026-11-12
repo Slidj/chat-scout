@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
   Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
-  Wallet, Mail, Gift, CreditCard
+  Wallet, Mail, Gift, CreditCard, Trash2
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
@@ -15,7 +15,8 @@ import { fetchModels, Model } from './lib/api';
 import { 
   getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
   TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups,
-  subscribePreloaderSettings, getCachedPreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
+  subscribePreloaderSettings, getCachedPreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS,
+  ChatSession, subscribeUserChats, deleteChatSession
 } from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
@@ -40,6 +41,10 @@ export default function App() {
   const [isCouponModalOpen, setIsCouponModalOpen] = useState(false);
   const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
   const [allUserTopups, setAllUserTopups] = useState<TopupRequest[]>([]);
+
+  // User Chats State
+  const [userChats, setUserChats] = useState<ChatSession[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
 
   // Preloader State
   const [preloaderSettings, setPreloaderSettings] = useState<PreloaderSettings>(getCachedPreloaderSettings);
@@ -162,6 +167,10 @@ export default function App() {
       setAllUserTopups(all.filter(t => t.userId === activeUid));
     });
 
+    const unsubChats = subscribeUserChats(activeUid, (chats) => {
+      setUserChats(chats);
+    });
+
     const unsubPreloader = subscribePreloaderSettings((settings) => {
       setPreloaderSettings(settings);
       if (!settings.isEnabled) {
@@ -179,6 +188,7 @@ export default function App() {
     return () => {
       unsubCoupons();
       unsubTopups();
+      unsubChats();
       unsubPreloader();
     };
   }, []);
@@ -242,7 +252,33 @@ export default function App() {
     if (!activeChatModelId && models.length > 0) {
       setActiveChatModelId(models[0].apiModelId);
     }
+    setActiveChatId(null);
     setIsChatOpen(true);
+  };
+
+  const handleSelectChatFromDrawer = (chat: ChatSession) => {
+    if (isUserBlocked) return;
+    if (!apiKey) {
+      setIsSettingsOpen(true);
+      return;
+    }
+    setActiveChatId(chat.id);
+    setIsChatOpen(true);
+    setIsDrawerOpen(false);
+  };
+
+  const handleDeleteChatFromDrawer = async (chatId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Видалити цей чат з історії та з бази даних?')) {
+      try {
+        await deleteChatSession(chatId);
+        if (activeChatId === chatId) {
+          setActiveChatId(null);
+        }
+      } catch (err) {
+        console.error('Error deleting chat from drawer:', err);
+      }
+    }
   };
 
   // Filtered providers and models based on search
@@ -757,26 +793,62 @@ export default function App() {
               )}
             </div>
 
-            {/* Recents Section (Screenshot 1) */}
-            <div className="mt-8 flex-1 overflow-y-auto pr-1">
-              <div className="text-xs font-semibold text-[#76736C] px-3.5 mb-2 uppercase tracking-wider">
-                Recents
+            {/* Recents Section - Real User Chat History (Screenshot 2) */}
+            <div className="mt-6 flex-1 overflow-y-auto pr-1 min-h-[160px]">
+              <div className="flex items-center justify-between px-3.5 mb-2">
+                <span className="text-xs font-semibold text-[#76736C] uppercase tracking-wider">
+                  Recents
+                </span>
+                {userChats.length > 0 && (
+                  <span className="text-[10px] font-mono text-[#8A8780] bg-[#22201D] px-2 py-0.5 rounded-full border border-[#34322E]">
+                    {userChats.length}
+                  </span>
+                )}
               </div>
-              <div className="space-y-1">
-                {models.slice(0, 5).map(m => (
-                  <div
-                    key={m.id}
-                    onClick={() => {
-                      activateModelForChat(m.apiModelId);
-                      setIsDrawerOpen(false);
-                    }}
-                    className="flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#242320] transition-colors cursor-pointer truncate"
-                  >
-                    <MessageSquare size={14} className="shrink-0 text-[#76736C]" />
-                    <span className="truncate">{m.name}</span>
-                  </div>
-                ))}
-              </div>
+
+              {userChats.length === 0 ? (
+                <div className="px-3.5 py-4 text-center border border-dashed border-[#2E2C28] rounded-2xl bg-[#1C1B18]/50 my-1">
+                  <MessageSquare size={18} className="mx-auto text-[#66635C] mb-1.5" />
+                  <p className="text-xs text-[#8A8780] font-medium">Немає збережених чатів</p>
+                  <p className="text-[11px] text-[#66635C] mt-0.5">Почніть новий діалог з ШІ</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {userChats.slice(0, 30).map(chat => {
+                    const isSelected = activeChatId === chat.id && isChatOpen;
+                    return (
+                      <div
+                        key={chat.id}
+                        onClick={() => handleSelectChatFromDrawer(chat)}
+                        className={`group relative flex items-center justify-between px-3.5 py-2.5 rounded-2xl text-xs transition-all cursor-pointer ${
+                          isSelected 
+                            ? 'bg-[#2E2C29] text-[#ECE8E1] font-semibold border border-[#3E3C37]' 
+                            : 'text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#242320]'
+                        }`}
+                        title={chat.title || 'Чат'}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-1">
+                          <MessageSquare 
+                            size={15} 
+                            className={`shrink-0 ${isSelected ? 'text-[#CC785C]' : 'text-[#76736C] group-hover:text-[#CC785C]'}`} 
+                          />
+                          <span className="truncate font-medium">{chat.title || 'Новий діалог'}</span>
+                        </div>
+
+                        {/* Delete Chat Button (Visible on hover on desktop, always accessible on mobile) */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteChatFromDrawer(chat.id, e)}
+                          className="p-1.5 rounded-lg text-[#76736C] hover:text-red-400 hover:bg-red-950/40 transition-colors opacity-80 sm:opacity-0 group-hover:opacity-100 shrink-0"
+                          title="Видалити чат з бази даних"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Bottom Bar: User Avatar & New Chat (Screenshot 1) */}
@@ -819,6 +891,7 @@ export default function App() {
         currentUser={tgUser}
         unreadCouponsCount={unreadCouponsCount}
         onOpenCoupons={() => setIsCouponModalOpen(true)}
+        activeChatId={activeChatId}
       />
 
       {/* Settings Modal */}

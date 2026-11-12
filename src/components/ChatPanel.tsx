@@ -34,6 +34,7 @@ interface ChatPanelProps {
   currentUser?: any;
   unreadCouponsCount?: number;
   onOpenCoupons?: () => void;
+  activeChatId?: string | null;
 }
 
 export function ChatPanel({ 
@@ -45,7 +46,8 @@ export function ChatPanel({
   isOpen, 
   currentUser,
   unreadCouponsCount = 0,
-  onOpenCoupons
+  onOpenCoupons,
+  activeChatId
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -125,6 +127,22 @@ export function ChatPanel({
 
     return () => unsubscribe();
   }, [currentUid]);
+
+  const lastHandledActiveChatIdRef = useRef<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (activeChatId === null && lastHandledActiveChatIdRef.current !== null) {
+      lastHandledActiveChatIdRef.current = null;
+      handleNewChat();
+    } else if (activeChatId && activeChatId !== lastHandledActiveChatIdRef.current) {
+      const targetChat = savedChats.find(c => c.id === activeChatId);
+      if (targetChat) {
+        lastHandledActiveChatIdRef.current = activeChatId;
+        handleSelectChat(targetChat);
+      }
+    }
+  }, [activeChatId, savedChats, isOpen]);
 
   const persistChat = (msgs: Message[], customTitle?: string) => {
     if (msgs.length === 0) return;
