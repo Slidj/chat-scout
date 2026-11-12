@@ -643,10 +643,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
         mediaType: preloaderMediaType,
         mediaUrl: preloaderMediaUrl.trim(),
         durationSeconds: Number(preloaderDuration) || 15,
-        title: preloaderTitle.trim() || undefined,
-        subtext: preloaderSubtext.trim() || undefined,
+        title: preloaderTitle.trim(),
+        subtext: preloaderSubtext.trim(),
         allowSkip: preloaderAllowSkip,
-        secondaryImageUrl: preloaderSecondaryImage.trim() || undefined,
+        secondaryImageUrl: preloaderSecondaryImage.trim(),
         secondaryDurationSeconds: Number(preloaderSecondaryDuration) || 3,
         secondaryText: preloaderSecondaryText.trim() || 'Завантаження застосунку...'
       }, currentUser?.first_name || currentUser?.username || 'Admin');

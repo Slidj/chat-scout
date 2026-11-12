@@ -5,6 +5,24 @@ import {
 import { db } from './firebase';
 import { Provider, AiModel } from '../types';
 
+/**
+ * Sanitizes object prior to Firestore write by removing keys with `undefined` values.
+ * Firestore setDoc/updateDoc throws unsupported field value error if any value is `undefined`.
+ */
+export function sanitizeForFirestore<T extends Record<string, any>>(data: T): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+        clean[key] = sanitizeForFirestore(value);
+      } else {
+        clean[key] = value;
+      }
+    }
+  }
+  return clean;
+}
+
 export const getProviders = async (): Promise<Provider[]> => {
   const snapshot = await getDocs(collection(db, 'providers'));
   return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Provider));
@@ -473,11 +491,12 @@ export const updateTopupStatus = async (
   }
 ): Promise<void> => {
   const ref = doc(db, 'topups', topupId);
-  await setDoc(ref, {
+  const payload = sanitizeForFirestore({
     status,
     ...adminData,
     updatedAt: new Date().toISOString()
-  }, { merge: true });
+  });
+  await setDoc(ref, payload, { merge: true });
 };
 
 export const sendCouponToUser = async (
@@ -486,12 +505,14 @@ export const sendCouponToUser = async (
   const now = new Date();
   const expiresAt = new Date(now.getTime() + COUPON_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
   
-  const docRef = await addDoc(collection(db, 'coupons'), {
+  const payload = sanitizeForFirestore({
     ...couponData,
     isRead: false,
     createdAt: now.toISOString(),
     expiresAt
   });
+
+  const docRef = await addDoc(collection(db, 'coupons'), payload);
 
   await logActivityEvent({
     type: 'coupon_sent',
@@ -629,11 +650,12 @@ export const updatePaymentSettings = async (
 ): Promise<void> => {
   const ref = doc(db, 'settings', 'payment');
   const now = new Date().toISOString();
-  await setDoc(ref, {
+  const payload = sanitizeForFirestore({
     ...settings,
     updatedAt: now,
     updatedBy: adminName || 'Admin'
-  }, { merge: true });
+  });
+  await setDoc(ref, payload, { merge: true });
 
   await logActivityEvent({
     type: 'admin_action',
@@ -719,11 +741,14 @@ export const updatePreloaderSettings = async (
   }
   const ref = doc(db, 'settings', 'preloader');
   const now = new Date().toISOString();
-  await setDoc(ref, {
+
+  const payload = sanitizeForFirestore({
     ...settings,
     updatedAt: now,
     updatedBy: adminName || 'Admin'
-  }, { merge: true });
+  });
+
+  await setDoc(ref, payload, { merge: true });
 
   await logActivityEvent({
     type: 'admin_action',
