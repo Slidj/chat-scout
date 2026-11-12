@@ -325,7 +325,7 @@ export default function App() {
       {/* Claude Mobile Top App Bar (Screenshot 2) */}
       <header 
         className="sticky top-0 z-30 flex items-center justify-between px-4 pb-3 bg-[#171614]/90 backdrop-blur-md border-b border-[#2C2A26]"
-        style={{ paddingTop: 'calc(0.75rem + var(--safe-top, 0px))' }}
+        style={{ paddingTop: 'calc(2.75rem + var(--safe-top, 0px))' }}
       >
         <div className="flex items-center gap-3">
           {currentView !== 'home' ? (
@@ -690,17 +690,28 @@ export default function App() {
         </button>
       </div>
 
-      {/* Claude Left Navigation Drawer (Screenshot 1) */}
-      {isDrawerOpen && (
+      {/* Claude Left Navigation Drawer (Screenshot 1 & Smooth Slide Transition) */}
+      <div 
+        className={`fixed inset-0 z-50 flex transition-[visibility] duration-300 ${
+          isDrawerOpen ? 'pointer-events-auto visible' : 'pointer-events-none invisible'
+        }`}
+      >
+        {/* Dark Backdrop */}
         <div 
-          className="fixed inset-0 z-50 flex bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ease-out ${
+            isDrawerOpen ? 'opacity-100' : 'opacity-0'
+          }`}
           onClick={() => setIsDrawerOpen(false)}
+        />
+
+        {/* Drawer Panel */}
+        <div 
+          className={`relative w-72 sm:w-80 bg-[#191816] border-r border-[#2C2B27] h-full flex flex-col p-5 shadow-2xl z-10 transform transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+            isDrawerOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+          onClick={(e) => e.stopPropagation()}
+          style={{ paddingTop: 'calc(2.5rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.5rem + var(--safe-bottom, 0px))' }}
         >
-          <div 
-            className="w-72 sm:w-80 bg-[#191816] border-r border-[#2C2B27] h-full flex flex-col p-5 shadow-2xl animate-in slide-in-from-left duration-250"
-            onClick={(e) => e.stopPropagation()}
-            style={{ paddingTop: 'calc(1.5rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.5rem + var(--safe-bottom, 0px))' }}
-          >
             {/* Wordmark (Screenshot 1) */}
             <div className="flex items-center justify-between mb-8 px-1">
               <h1 className="font-claude-serif text-3xl font-normal text-[#ECE8E1] tracking-tight">
@@ -878,7 +889,6 @@ export default function App() {
 
           </div>
         </div>
-      )}
 
       {/* Claude Chat Panel Overlay */}
       <ChatPanel

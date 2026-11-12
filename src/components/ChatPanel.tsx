@@ -617,7 +617,7 @@ export function ChatPanel({
       {/* Top Header - Claude Mobile App Style */}
       <header 
         className="flex items-center justify-between px-4 pb-3 bg-[#181715] border-b border-[#2C2A26] shrink-0 z-20"
-        style={{ paddingTop: 'calc(0.75rem + var(--safe-top, 0px))' }}
+        style={{ paddingTop: 'calc(2.75rem + var(--safe-top, 0px))' }}
       >
         <div className="flex items-center gap-3">
           <button

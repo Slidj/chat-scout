@@ -777,7 +777,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       {/* Top Header */}
       <header 
         className="flex items-center justify-between px-4 sm:px-6 pb-3.5 bg-[#1C1B18] border-b border-[#2C2A26] shrink-0 z-20"
-        style={{ paddingTop: 'calc(0.75rem + var(--safe-top, 0px))' }}
+        style={{ paddingTop: 'calc(2.75rem + var(--safe-top, 0px))' }}
       >
         <div className="flex items-center gap-3">
           <button 
