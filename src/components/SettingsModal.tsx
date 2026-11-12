@@ -18,8 +18,11 @@ export function SettingsModal({ isOpen, onClose, currentApiKey, onSave }: Settin
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="w-full max-w-md bg-[#242320] text-[#ECE8E1] rounded-3xl shadow-2xl overflow-hidden border border-[#383632]">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+      style={{ paddingTop: 'calc(4rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.25rem + var(--safe-bottom, 0px))' }}
+    >
+      <div className="w-full max-w-md max-h-full overflow-y-auto bg-[#242320] text-[#ECE8E1] rounded-3xl shadow-2xl border border-[#383632]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#312F2B]">
           <div className="flex items-center gap-2">
             <Key size={18} className="text-[#CC785C]" />

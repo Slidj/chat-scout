@@ -67,9 +67,12 @@ export function CouponCardModal({ isOpen, onClose, coupons, onStartChat }: Coupo
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center px-3 sm:px-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
+      style={{ paddingTop: 'calc(4rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.25rem + var(--safe-bottom, 0px))' }}
+    >
       <div 
-        className="relative w-full max-w-md flex flex-col max-h-[95vh] overflow-hidden rounded-3xl"
+        className="relative w-full max-w-md flex flex-col max-h-full overflow-y-auto rounded-3xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button top-right */}

@@ -167,9 +167,12 @@ export function TopupModal({ isOpen, onClose, currentUser, userRequests = [] }: 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center px-3 sm:px-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200"
+      style={{ paddingTop: 'calc(4rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.25rem + var(--safe-bottom, 0px))' }}
+    >
       <div 
-        className="relative w-full max-w-lg bg-[#1B1A17] border border-[#35332F] rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-[#EDE9DF]"
+        className="relative w-full max-w-lg bg-[#1B1A17] border border-[#35332F] rounded-3xl shadow-2xl flex flex-col max-h-full overflow-hidden text-[#EDE9DF]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
