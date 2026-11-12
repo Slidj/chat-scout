@@ -719,11 +719,30 @@ export const DEFAULT_PRELOADER_SETTINGS: PreloaderSettings = {
   secondaryText: 'Завантаження застосунку...'
 };
 
+export const getCachedPreloaderSettings = (): PreloaderSettings => {
+  if (typeof window === 'undefined') return DEFAULT_PRELOADER_SETTINGS;
+  try {
+    const raw = localStorage.getItem('cached_preloader_settings');
+    if (raw) {
+      return { ...DEFAULT_PRELOADER_SETTINGS, ...JSON.parse(raw) };
+    }
+  } catch (e) {
+    console.warn('Failed to parse cached preloader settings:', e);
+  }
+  return DEFAULT_PRELOADER_SETTINGS;
+};
+
 export const getPreloaderSettings = async (): Promise<PreloaderSettings> => {
   try {
     const docSnap = await getDoc(doc(db, 'settings', 'preloader'));
     if (docSnap.exists()) {
-      return { ...DEFAULT_PRELOADER_SETTINGS, ...docSnap.data() } as PreloaderSettings;
+      const data = { ...DEFAULT_PRELOADER_SETTINGS, ...docSnap.data() } as PreloaderSettings;
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('cached_preloader_settings', JSON.stringify(data));
+        } catch (e) {}
+      }
+      return data;
     }
     return DEFAULT_PRELOADER_SETTINGS;
   } catch (e) {
@@ -763,7 +782,13 @@ export const subscribePreloaderSettings = (
   const ref = doc(db, 'settings', 'preloader');
   return onSnapshot(ref, (docSnap) => {
     if (docSnap.exists()) {
-      callback({ ...DEFAULT_PRELOADER_SETTINGS, ...docSnap.data() } as PreloaderSettings);
+      const data = { ...DEFAULT_PRELOADER_SETTINGS, ...docSnap.data() } as PreloaderSettings;
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('cached_preloader_settings', JSON.stringify(data));
+        } catch (e) {}
+      }
+      callback(data);
     } else {
       callback(DEFAULT_PRELOADER_SETTINGS);
     }

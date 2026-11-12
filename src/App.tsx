@@ -15,7 +15,7 @@ import { fetchModels, Model } from './lib/api';
 import { 
   getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
   TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups,
-  subscribePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
+  subscribePreloaderSettings, getCachedPreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
 } from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
@@ -42,7 +42,7 @@ export default function App() {
   const [allUserTopups, setAllUserTopups] = useState<TopupRequest[]>([]);
 
   // Preloader State
-  const [preloaderSettings, setPreloaderSettings] = useState<PreloaderSettings>(DEFAULT_PRELOADER_SETTINGS);
+  const [preloaderSettings, setPreloaderSettings] = useState<PreloaderSettings>(getCachedPreloaderSettings);
   const [isPreloaderActive, setIsPreloaderActive] = useState<boolean>(true);
   
   // Data State

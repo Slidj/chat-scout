@@ -31,22 +31,13 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
     ? localStorage.getItem(`seen_preloader_version_${settings.versionId}`) === 'true'
     : false;
 
-  // If user hasn't seen this version yet AND primary media exists -> show primary video/gif!
-  // Otherwise -> show quick secondary preloader with stylish harmonic wave!
-  const initialMode: 'primary' | 'secondary' = (hasPrimaryMedia && (!hasSeenVersion || isPreviewMode))
+  // Derive preloader mode deterministically
+  const mode: 'primary' | 'secondary' = (hasPrimaryMedia && (!hasSeenVersion || isPreviewMode))
     ? 'primary'
     : 'secondary';
 
-  const [mode, setMode] = useState<'primary' | 'secondary'>(initialMode);
   const [isFadingOut, setIsFadingOut] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
-
-  // Sync mode if settings change dynamically
-  useEffect(() => {
-    if (hasPrimaryMedia && (!hasSeenVersion || isPreviewMode)) {
-      setMode('primary');
-    }
-  }, [settings.versionId, settings.mediaUrl, isPreviewMode]);
 
   // Force video element playback on mount / mode switch
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -160,8 +151,8 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
                 loop={false}
                 onEnded={handleComplete}
                 onError={(err) => {
-                  console.warn('Preloader video failed to load, switching to secondary preloader', err);
-                  setMode('secondary');
+                  console.warn('Preloader video failed to load, completing preloader:', err);
+                  handleComplete();
                 }}
                 className="relative z-10 w-full h-full object-contain max-w-full max-h-full drop-shadow-2xl"
               />
@@ -169,9 +160,9 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
               <img
                 src={settings.mediaUrl}
                 alt={settings.title || 'Preloader animation'}
-                onError={() => {
-                  console.warn('Preloader image failed to load, switching to secondary preloader');
-                  setMode('secondary');
+                onError={(err) => {
+                  console.warn('Preloader image failed to load, completing preloader:', err);
+                  handleComplete();
                 }}
                 className="relative z-10 w-full h-full object-contain max-w-full max-h-full drop-shadow-2xl animate-in zoom-in-95 duration-700"
               />
