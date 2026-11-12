@@ -714,6 +714,9 @@ export const updatePreloaderSettings = async (
   settings: Partial<PreloaderSettings>,
   adminName?: string
 ): Promise<void> => {
+  if (settings.mediaUrl && settings.mediaUrl.startsWith('data:') && settings.mediaUrl.length > 800 * 1024) {
+    throw new Error('Розмір завантаженого файлу перевищує ліміт бази даних (макс. 800 КБ). Будь ласка, використовуйте посилання на Pinterest (наприклад https://pin.it/...) замість прямого важкого файлу.');
+  }
   const ref = doc(db, 'settings', 'preloader');
   const now = new Date().toISOString();
   await setDoc(ref, {

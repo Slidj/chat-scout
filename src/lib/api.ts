@@ -333,3 +333,49 @@ export async function generateChatResponse(
   throw new Error("Некоректна відповідь від API");
 }
 
+/**
+ * Resolves Pinterest shortlinks (pin.it/...), Pinterest pins, Giphy,
+ * or generic web pages containing video to extract the direct HD .mp4 stream.
+ */
+export async function resolveMediaLink(url: string): Promise<{
+  success: boolean;
+  mediaUrl?: string;
+  mediaType?: 'video' | 'gif' | 'image';
+  title?: string;
+  posterUrl?: string;
+  error?: string;
+}> {
+  if (!url || !url.trim()) {
+    return { success: false, error: 'Вкажіть посилання' };
+  }
+
+  const cleanUrl = url.trim();
+
+  // If already direct mp4/gif/image
+  const lower = cleanUrl.toLowerCase().split('?')[0];
+  if (lower.endsWith('.mp4') || lower.endsWith('.webm') || lower.endsWith('.mov') || lower.endsWith('.m4v')) {
+    return { success: true, mediaUrl: cleanUrl, mediaType: 'video' };
+  }
+  if (lower.endsWith('.gif')) {
+    return { success: true, mediaUrl: cleanUrl, mediaType: 'gif' };
+  }
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.webp')) {
+    return { success: true, mediaUrl: cleanUrl, mediaType: 'image' };
+  }
+
+  try {
+    const res = await fetch(`/api/resolve-media?url=${encodeURIComponent(cleanUrl)}`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err: any) {
+    console.warn('Media resolution error:', err);
+    return {
+      success: false,
+      error: err.message || 'Не вдалося розпізнати відео'
+    };
+  }
+}
+

@@ -127,12 +127,20 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
                 muted={isMuted}
                 loop={false}
                 onEnded={handleComplete}
+                onError={() => {
+                  console.warn('Preloader video failed to load, switching to secondary preloader');
+                  setMode('secondary');
+                }}
                 className="relative z-10 w-full h-full object-contain max-w-full max-h-full drop-shadow-2xl"
               />
             ) : (
               <img
                 src={settings.mediaUrl}
                 alt={settings.title || 'Preloader animation'}
+                onError={() => {
+                  console.warn('Preloader image failed to load, switching to secondary preloader');
+                  setMode('secondary');
+                }}
                 className="relative z-10 w-full h-full object-contain max-w-full max-h-full drop-shadow-2xl animate-in zoom-in-95 duration-700"
               />
             )}

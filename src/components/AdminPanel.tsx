@@ -9,7 +9,7 @@ import {
   subscribePaymentSettings, updatePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS,
   subscribePreloaderSettings, updatePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
 } from '../lib/db';
-import { fetchModels } from '../lib/api';
+import { fetchModels, resolveMediaLink } from '../lib/api';
 import { Provider, AiModel } from '../types';
 import { AppPreloader } from './AppPreloader';
 import { 
@@ -82,6 +82,8 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [isSavingPreloader, setIsSavingPreloader] = useState(false);
   const [preloaderSaveSuccess, setPreloaderSaveSuccess] = useState(false);
   const [adminTestingPreloader, setAdminTestingPreloader] = useState(false);
+  const [isResolvingMedia, setIsResolvingMedia] = useState(false);
+  const [mediaResolveFeedback, setMediaResolveFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
 
   // Drill-down Modal State (Clickable Cards & Stats)
   const [drillModal, setDrillModal] = useState<DrillDownModal>(null);
@@ -582,8 +584,58 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     }
   };
 
+  const handleResolveMediaUrl = async (customUrl?: string) => {
+    const rawTarget = typeof customUrl === 'string' ? customUrl : preloaderMediaUrl;
+    const target = rawTarget.trim();
+    if (!target) {
+      setMediaResolveFeedback({
+        type: 'error',
+        message: 'Будь ласка, вставте посилання на Pinterest (напр. https://pin.it/... або https://pinterest.com/pin/...) або пряме посилання.'
+      });
+      return;
+    }
+
+    setIsResolvingMedia(true);
+    setMediaResolveFeedback(null);
+    try {
+      const res = await resolveMediaLink(target);
+      if (res.success && res.mediaUrl) {
+        setPreloaderMediaUrl(res.mediaUrl);
+        if (res.mediaType) {
+          setPreloaderMediaType(res.mediaType);
+        }
+        setMediaResolveFeedback({
+          type: 'success',
+          message: '✓ Відео з Pinterest успішно розпізнано! Прямий HD відеопотік (.mp4) підключено.'
+        });
+      } else {
+        setMediaResolveFeedback({
+          type: 'error',
+          message: res.error || 'Не вдалося автоматично знайти відео за цим посиланням.'
+        });
+      }
+    } catch (err: any) {
+      setMediaResolveFeedback({
+        type: 'error',
+        message: 'Помилка підключення: ' + (err.message || 'Спробуйте ще раз')
+      });
+    } finally {
+      setIsResolvingMedia(false);
+    }
+  };
+
   const handleSavePreloaderConfig = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+
+    // Guard against large base64 strings exceeding Firestore 1MB document limit
+    if (preloaderMediaUrl.startsWith('data:') && preloaderMediaUrl.length > 800 * 1024) {
+      alert(
+        '⚠️ Розмір медіа-файлу перевищує ліміт бази даних (1 МБ).\n\n' +
+        '👉 Скопіюйте посилання на це відео з Pinterest (наприклад: https://pin.it/...) та вставте його замість прямого файлу — це дозволить транслювати відео у високій якості без обмежень!'
+      );
+      return;
+    }
+
     setIsSavingPreloader(true);
     try {
       await updatePreloaderSettings({
@@ -631,6 +683,20 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Strict safety check: Firestore document max size is 1MB. Base64 expands by ~33%.
+    // To fit comfortably with other fields, cap device uploads at 750KB.
+    const MAX_ALLOWED_BYTES = 750 * 1024;
+    if (file.size > MAX_ALLOWED_BYTES) {
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+      alert(
+        `⚠️ Файл завеликий для збереження в базі даних (${sizeMb} МБ).\n` +
+        `Хмарна база даних підтримує файли з пристрою розміром до 750 КБ.\n\n` +
+        `💡 Рекомендовано: замість файлу вставте посилання на відео з Pinterest (наприклад: https://pin.it/... або https://pinterest.com/pin/...) і натисніть «Розпізнати» — це працює миттєво та транслює HD якість!`
+      );
+      e.target.value = '';
+      return;
+    }
+
     if (file.type.startsWith('video/')) {
       setPreloaderMediaType('video');
     } else if (file.type === 'image/gif') {
@@ -643,6 +709,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     reader.onload = (event) => {
       if (event.target?.result) {
         setPreloaderMediaUrl(event.target.result as string);
+        setMediaResolveFeedback({
+          type: 'info',
+          message: `Файл з пристрою готовий (${(file.size / 1024).toFixed(0)} КБ)`
+        });
       }
     };
     reader.readAsDataURL(file);
@@ -651,6 +721,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const handleSecondaryImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.size > 750 * 1024) {
+      alert(`⚠️ Зображення завелике (${(file.size / (1024 * 1024)).toFixed(2)} МБ). Оберіть файл до 750 КБ.`);
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
@@ -2611,13 +2688,17 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                 {preloaderMediaType !== 'none' && (
                   <div className="space-y-4 pt-1">
                     <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider">
-                          Посилання на медіа (URL) *
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                        <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider flex items-center gap-1.5">
+                          <span>Посилання на медіа (URL) *</span>
+                          <span className="text-[10px] text-amber-400 font-normal normal-case bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-800/40">
+                            Підтримує Pinterest, pin.it, GIF, MP4
+                          </span>
                         </label>
+
                         <label className="text-xs text-[#CC785C] hover:underline cursor-pointer flex items-center gap-1">
                           <Upload size={12} />
-                          <span>Завантажити файл із пристрою</span>
+                          <span>Файл з пристрою (до 750 КБ)</span>
                           <input
                             type="file"
                             accept="video/mp4,video/webm,video/*,image/gif,image/jpeg,image/png,image/webp"
@@ -2627,16 +2708,110 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                         </label>
                       </div>
 
-                      <input
-                        type="text"
-                        value={preloaderMediaUrl}
-                        onChange={(e) => setPreloaderMediaUrl(e.target.value)}
-                        placeholder="https://... пряме посилання на mp4/webm з Pinterest, Tenor, Giphy або свій CDN"
-                        className="w-full px-3.5 py-2.5 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm font-mono text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
-                      />
+                      {/* Input with embedded / attached Resolve Button */}
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            value={preloaderMediaUrl}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setPreloaderMediaUrl(val);
+                              // Auto-suggest resolution if Pinterest link pasted
+                              if ((val.includes('pin.it/') || val.includes('pinterest.com/pin/')) && !val.includes('.mp4')) {
+                                setMediaResolveFeedback({
+                                  type: 'info',
+                                  message: '📌 Виявлено посилання на Pinterest! Натисніть «Розпізнати Pinterest», щоб отримати пряме HD відео.'
+                                });
+                              }
+                            }}
+                            onPaste={(e) => {
+                              const pasted = e.clipboardData.getData('text');
+                              if (pasted && (pasted.includes('pin.it/') || pasted.includes('pinterest.com/pin/'))) {
+                                // Auto-trigger resolution on paste
+                                setTimeout(() => {
+                                  handleResolveMediaUrl(pasted);
+                                }, 80);
+                              }
+                            }}
+                            placeholder="Вставте https://pin.it/... або пряме посилання на mp4/webm/gif"
+                            className="w-full px-3.5 py-2.5 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm font-mono text-[#FAF8F5] focus:outline-none focus:border-[#CC785C] placeholder:text-[#5E5B54]"
+                          />
+                          {preloaderMediaUrl && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreloaderMediaUrl('');
+                                setMediaResolveFeedback(null);
+                              }}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#7A7770] hover:text-[#ECE8E1] p-1"
+                              title="Очистити"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
 
-                      <div className="mt-2 p-2.5 bg-[#1C1B18] rounded-xl border border-[#35322D] text-[11px] text-[#A8A49C] leading-relaxed">
-                        💡 <strong className="text-white">Підтримка Pinterest та вертикальних відео:</strong> ви можете вставляти пряме посилання на відео будь-якої орієнтації. Завдяки нашому розумному дзеркальному розмиттю (ambient blur) бічні смуги заповнюються м'яким живим кольором відео, а саме відео відображається повністю <strong className="text-[#CC785C]">без жодного обрізання</strong>.
+                        <button
+                          type="button"
+                          onClick={() => handleResolveMediaUrl()}
+                          disabled={isResolvingMedia || !preloaderMediaUrl.trim()}
+                          className="px-4 py-2.5 bg-[#CC785C] hover:bg-[#D97757] text-white rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2 shadow-xs shrink-0"
+                          title="Автоматично витягти прямий MP4 відео-потік із Pinterest"
+                        >
+                          <Sparkles size={14} className={isResolvingMedia ? 'animate-spin' : ''} />
+                          <span>{isResolvingMedia ? 'Розпізнавання...' : 'Розпізнати Pinterest'}</span>
+                        </button>
+                      </div>
+
+                      {/* Feedback Banner */}
+                      {mediaResolveFeedback && (
+                        <div className={`mt-2 p-2.5 rounded-xl border text-xs flex items-center gap-2 animate-in fade-in ${
+                          mediaResolveFeedback.type === 'success'
+                            ? 'bg-emerald-950/70 border-emerald-800/60 text-emerald-300'
+                            : mediaResolveFeedback.type === 'error'
+                            ? 'bg-rose-950/70 border-rose-800/60 text-rose-300'
+                            : 'bg-amber-950/70 border-amber-800/60 text-amber-300'
+                        }`}>
+                          {mediaResolveFeedback.type === 'success' && <CheckCircle2 size={15} className="shrink-0" />}
+                          {mediaResolveFeedback.type === 'error' && <AlertCircle size={15} className="shrink-0" />}
+                          {mediaResolveFeedback.type === 'info' && <Info size={15} className="shrink-0" />}
+                          <span className="flex-1 leading-snug">{mediaResolveFeedback.message}</span>
+                        </div>
+                      )}
+
+                      {/* Pinterest Quick Example Button */}
+                      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#8E8B83]">
+                        <div className="flex items-center gap-1.5">
+                          <span>💡 Приклад посилання:</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const exampleUrl = 'https://pin.it/4q6ov1wS0';
+                              setPreloaderMediaUrl(exampleUrl);
+                              handleResolveMediaUrl(exampleUrl);
+                            }}
+                            className="text-[#CC785C] hover:underline font-mono bg-[#252421] px-2 py-0.5 rounded-md border border-[#3A3834]"
+                            title="Натисніть для перевірки прикладу з Pinterest"
+                          >
+                            https://pin.it/4q6ov1wS0
+                          </button>
+                        </div>
+
+                        {preloaderMediaUrl && (
+                          <span className="font-mono text-[10px] text-[#A8A49C]">
+                            {preloaderMediaUrl.startsWith('data:') 
+                              ? `Локальний файл (~${Math.round(preloaderMediaUrl.length / 1024)} КБ)` 
+                              : preloaderMediaUrl.includes('pinimg.com')
+                              ? '✓ Pinterest CDN (HD stream)'
+                              : 'Зовнішнє посилання'
+                            }
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-2 p-3 bg-[#1C1B18] rounded-2xl border border-[#35322D] text-[11px] text-[#A8A49C] leading-relaxed">
+                        ✨ <strong className="text-white">Як працює підтримка Pinterest:</strong> просто скопіюйте посилання на відео з додатка Pinterest (наприклад <span className="font-mono text-amber-300">https://pin.it/...</span> або повний <span className="font-mono text-amber-300">pinterest.com/pin/...</span>) і вставте в поле вище. Застосунок сам знайде прямий HD потік відео <strong className="text-white">без необхідності шукати файл MP4 вручну</strong>, а завдяки розумному дзеркальному розмиттю вертикальні відео виглядають бездоганно без чорних смуг.
                       </div>
                     </div>
 
