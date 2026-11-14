@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
   Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
-  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe
+  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe, FileText
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
@@ -629,12 +629,20 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {agent.webSearchEnabled && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-[10px] font-semibold text-emerald-300 shrink-0">
-                                  <Globe size={10} />
-                                  <span>Web</span>
-                                </span>
-                              )}
+                              <div className="flex flex-col items-end gap-1 shrink-0">
+                                {agent.webSearchEnabled && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-[10px] font-semibold text-emerald-300">
+                                    <Globe size={10} />
+                                    <span>Web</span>
+                                  </span>
+                                )}
+                                {agent.webReaderEnabled && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-950/60 border border-sky-800/40 text-[10px] font-semibold text-sky-300">
+                                    <FileText size={10} />
+                                    <span>Reader</span>
+                                  </span>
+                                )}
+                              </div>
                             </div>
 
                             <p className="text-xs text-[#9E9A92] line-clamp-2 leading-relaxed">
@@ -644,7 +652,13 @@ export default function App() {
 
                           <div className="pt-2.5 border-t border-[#312F2B] flex items-center justify-between text-xs">
                             <span className="text-[#7E7B74]">
-                              {agent.webSearchEnabled ? 'Підтримує веб-пошук' : 'Системні інструкції'}
+                              {agent.webSearchEnabled && agent.webReaderEnabled
+                                ? 'Веб-пошук і читання сторінок'
+                                : agent.webSearchEnabled
+                                ? 'Підтримує веб-пошук'
+                                : agent.webReaderEnabled
+                                ? 'Читання веб-сторінок'
+                                : 'Системні інструкції'}
                             </span>
                             <span className="text-[#CC785C] font-semibold flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
                               <span>Відкрити чат</span>

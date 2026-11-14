@@ -24,6 +24,7 @@ export interface Agent {
   systemPrompt: string;
   modelId: string;
   webSearchEnabled: boolean;
+  webReaderEnabled?: boolean;
   searchUrl: string;
   color?: string;
   createdAt?: string;

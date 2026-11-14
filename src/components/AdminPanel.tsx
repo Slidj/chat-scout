@@ -770,7 +770,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
   const navItems = [
     { id: 'dashboard' as AdminTab, label: 'Дашборд', icon: LayoutDashboard, badge: null, desc: 'Жива статистика та аналітика' },
-    { id: 'agents' as AdminTab, label: 'Керування агентами', icon: Bot, badge: agents.length, desc: 'Промпти, моделі та веб-пошук' },
+    { id: 'agents' as AdminTab, label: 'Керування агентами', icon: Bot, badge: agents.length, desc: 'Промпти, моделі, пошук і читач' },
     { id: 'topups' as AdminTab, label: 'Поповнення & Купони', icon: CreditCard, badge: pendingTopupsCount > 0 ? pendingTopupsCount : null, desc: 'Перевірка чеків, видача купонів' },
     { id: 'preloader' as AdminTab, label: 'Прелоадер & Заставка', icon: Film, badge: null, desc: 'Pinterest відео, GIF, хвиля' },
     { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти, блокування, сторінки' },
@@ -1758,6 +1758,12 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                                     ) : (
                                       <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#1C1B18] text-[#7E7B74] border border-[#2F2D29]">
                                         Без веб-пошуку
+                                      </span>
+                                    )}
+                                    {agent.webReaderEnabled && (
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-sky-950/60 text-sky-300 border border-sky-800/50">
+                                        <FileText size={10} />
+                                        Читання сторінок
                                       </span>
                                     )}
                                   </div>
@@ -4398,6 +4404,7 @@ function AgentFormModal({
     availableModels.length === 0 || (!!agent?.modelId && !availableModels.some(m => m.id === agent.modelId))
   );
   const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(agent?.webSearchEnabled ?? false);
+  const [webReaderEnabled, setWebReaderEnabled] = useState<boolean>(agent?.webReaderEnabled ?? false);
   const [searchUrl, setSearchUrl] = useState<string>(agent?.searchUrl || DEFAULT_AGENT_SEARCH_URL);
   const [color, setColor] = useState<string>(agent?.color || '#CC785C');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -4416,6 +4423,7 @@ function AgentFormModal({
         systemPrompt: systemPrompt.trim(),
         modelId: modelId.trim(),
         webSearchEnabled,
+        webReaderEnabled,
         searchUrl: (searchUrl || DEFAULT_AGENT_SEARCH_URL).trim(),
         color
       });
@@ -4619,6 +4627,38 @@ function AgentFormModal({
             <p className="text-[11px] text-[#7A7770]">
               Формат запиту: <code className="text-[#A8A49C]">?q=запит&format=json</code>
             </p>
+          </div>
+
+          <div className="border-t border-[#2E2C27] pt-3.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                webReaderEnabled ? 'bg-sky-950/70 text-sky-400 border border-sky-800/50' : 'bg-[#262522] text-[#7E7B74]'
+              }`}>
+                <FileText size={18} />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[#ECE8E1]">Читання веб-сторінок</div>
+                <div className="text-[11px] text-[#8E8B83]">
+                  Додає інструмент <code className="text-sky-300">read_webpage(url)</code> через Jina Reader
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={webReaderEnabled}
+              onClick={() => setWebReaderEnabled(!webReaderEnabled)}
+              className={`w-12 h-6.5 rounded-full transition-colors relative shrink-0 ${
+                webReaderEnabled ? 'bg-sky-500' : 'bg-[#3C3934]'
+              }`}
+            >
+              <span
+                className={`block w-5 h-5 bg-white rounded-full shadow-sm transition-transform transform ${
+                  webReaderEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
           </div>
         </div>
 

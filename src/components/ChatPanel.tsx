@@ -398,10 +398,11 @@ export function ChatPanel({
     abortControllerRef.current = abortController;
     const startTime = Date.now();
     let latestSearchQueries: string[] = [];
+    let latestReadUrls: string[] = [];
     setToolStatus(null);
 
     try {
-      // Real-time token streaming with smooth fluid animation + Custom Agent System Prompt & Web Search Tool Calling
+      // Real-time token streaming with smooth fluid animation + Custom Agent System Prompt & Tool Calling
       await streamChatResponse(
         apiKey,
         selectedModel,
@@ -416,11 +417,16 @@ export function ChatPanel({
           ? {
               systemPrompt: activeAgent.systemPrompt,
               webSearchEnabled: activeAgent.webSearchEnabled,
+              webReaderEnabled: !!activeAgent.webReaderEnabled,
               searchUrl: activeAgent.searchUrl,
               onStatusChange: (status) => setToolStatus(status),
               onSearchQueries: (queries) => {
                 latestSearchQueries = queries;
                 setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, searchQueries: queries } : m));
+              },
+              onReadUrls: (urls) => {
+                latestReadUrls = urls;
+                setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, readUrls: urls } : m));
               }
             }
           : undefined
@@ -434,7 +440,8 @@ export function ChatPanel({
         id: newModelId,
         role: 'model',
         text: streamTargetRef.current,
-        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {})
+        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {}),
+        ...(latestReadUrls.length > 0 ? { readUrls: latestReadUrls } : {})
       };
       const finalHistory = [...newHistory, finalAssistantMessage];
       persistChat(finalHistory, chatTitle);
@@ -530,6 +537,7 @@ export function ChatPanel({
     abortControllerRef.current = abortController;
     const startTime = Date.now();
     let latestSearchQueries: string[] = [];
+    let latestReadUrls: string[] = [];
     setToolStatus(null);
 
     try {
@@ -547,11 +555,16 @@ export function ChatPanel({
           ? {
               systemPrompt: activeAgent.systemPrompt,
               webSearchEnabled: activeAgent.webSearchEnabled,
+              webReaderEnabled: !!activeAgent.webReaderEnabled,
               searchUrl: activeAgent.searchUrl,
               onStatusChange: (status) => setToolStatus(status),
               onSearchQueries: (queries) => {
                 latestSearchQueries = queries;
                 setMessages(prev => prev.map(m => m.id === modelId ? { ...m, searchQueries: queries } : m));
+              },
+              onReadUrls: (urls) => {
+                latestReadUrls = urls;
+                setMessages(prev => prev.map(m => m.id === modelId ? { ...m, readUrls: urls } : m));
               }
             }
           : undefined
@@ -564,7 +577,8 @@ export function ChatPanel({
         id: modelId,
         role: 'model',
         text: streamTargetRef.current,
-        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {})
+        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {}),
+        ...(latestReadUrls.length > 0 ? { readUrls: latestReadUrls } : {})
       };
       persistChat([...historyWithoutLast, finalAssistantMessage]);
 
@@ -710,6 +724,12 @@ export function ChatPanel({
                   <span>Web</span>
                 </span>
               )}
+              {activeAgent?.webReaderEnabled && (
+                <span className="hidden xs:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sky-950/60 border border-sky-800/50 text-[10px] font-medium text-sky-300 shrink-0">
+                  <FileText size={10} />
+                  <span>Reader</span>
+                </span>
+              )}
             </div>
             {(activeAgent || currentTitle !== 'Новий чат') && (
               <span className="text-[11px] text-[#9E9A92] truncate">
@@ -819,6 +839,15 @@ export function ChatPanel({
                         <span className="inline-flex items-center gap-1 text-emerald-400">
                           <Globe size={10} />
                           Веб-пошук
+                        </span>
+                      </>
+                    )}
+                    {activeAgent.webReaderEnabled && (
+                      <>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-sky-400">
+                          <FileText size={10} />
+                          Читач сторінок
                         </span>
                       </>
                     )}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle, Globe } from 'lucide-react';
+import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle, Globe, FileText } from 'lucide-react';
 import { Message } from '../lib/api';
 import { MarkdownContent } from './MarkdownContent';
 
@@ -114,17 +114,34 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, 
         className={`pr-2 pl-0.5 ${isTyping ? 'cursor-pointer' : ''}`}
         title={isTyping ? "Натисніть щоб показати текст одразу" : undefined}
       >
-        {message.searchQueries && message.searchQueries.length > 0 && (
+        {((message.searchQueries && message.searchQueries.length > 0) || (message.readUrls && message.readUrls.length > 0)) && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-            {message.searchQueries.map((q, idx) => (
+            {message.searchQueries?.map((q, idx) => (
               <span
-                key={idx}
+                key={`search-${idx}`}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#24231F] border border-[#3B3831] text-[11px] font-medium text-[#C8C3B8]"
               >
-                <Globe size={11} className="text-[#CC785C]" />
+                <Globe size={11} className="text-[#CC785C] shrink-0" />
                 <span>Пошук: «{q}»</span>
               </span>
             ))}
+            {message.readUrls?.map((url, idx) => {
+              let displayLabel = url;
+              try {
+                const parsed = new URL(url);
+                displayLabel = `${parsed.hostname}${parsed.pathname !== '/' ? parsed.pathname : ''}`;
+              } catch {}
+              return (
+                <span
+                  key={`read-${idx}`}
+                  title={url}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#202328] border border-[#323A46] text-[11px] font-medium text-[#C5D3E6] max-w-full"
+                >
+                  <FileText size={11} className="text-sky-400 shrink-0" />
+                  <span className="truncate max-w-[220px] sm:max-w-[300px]">Читаю сторінку: {displayLabel}</span>
+                </span>
+              );
+            })}
           </div>
         )}
 
@@ -132,8 +149,12 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, 
           <div className="flex items-center gap-2.5 py-1 text-[#9E9A92] text-sm select-none animate-pulse">
             {toolStatus ? (
               <>
-                <Globe size={15} className="text-[#CC785C] animate-spin" />
-                <span className="font-medium text-[#DED8CD]">{toolStatus}</span>
+                {toolStatus.startsWith('Читаю сторінку') ? (
+                  <FileText size={15} className="text-sky-400 animate-pulse shrink-0" />
+                ) : (
+                  <Globe size={15} className="text-[#CC785C] animate-spin shrink-0" />
+                )}
+                <span className="font-medium text-[#DED8CD] truncate">{toolStatus}</span>
               </>
             ) : (
               <>
@@ -143,7 +164,19 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, 
             )}
           </div>
         ) : (
-          <MarkdownContent content={message.text} isTyping={isTyping} />
+          <>
+            <MarkdownContent content={message.text} isTyping={isTyping} />
+            {isTyping && toolStatus && (
+              <div className="mt-2.5 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#24231F] border border-[#3B3831] text-xs text-[#DED8CD] animate-pulse max-w-full">
+                {toolStatus.startsWith('Читаю сторінку') ? (
+                  <FileText size={13} className="text-sky-400 shrink-0" />
+                ) : (
+                  <Globe size={13} className="text-[#CC785C] animate-spin shrink-0" />
+                )}
+                <span className="truncate">{toolStatus}</span>
+              </div>
+            )}
+          </>
         )}
       </div>
 

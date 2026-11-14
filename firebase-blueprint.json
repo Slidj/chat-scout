@@ -27,6 +27,7 @@
         "systemPrompt": { "type": "string", "required": true },
         "modelId": { "type": "string", "required": true },
         "webSearchEnabled": { "type": "boolean", "required": true },
+        "webReaderEnabled": { "type": "boolean", "required": false },
         "searchUrl": { "type": "string", "required": true }
       }
     }

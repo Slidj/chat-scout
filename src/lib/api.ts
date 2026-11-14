@@ -9,6 +9,7 @@ export interface Message {
   role: 'user' | 'model';
   text: string;
   searchQueries?: string[];
+  readUrls?: string[];
 }
 
 export interface Model {
@@ -19,9 +20,11 @@ export interface Model {
 export interface ChatRequestOptions {
   systemPrompt?: string;
   webSearchEnabled?: boolean;
+  webReaderEnabled?: boolean;
   searchUrl?: string;
   onStatusChange?: (status: string | null) => void;
   onSearchQueries?: (queries: string[]) => void;
+  onReadUrls?: (urls: string[]) => void;
 }
 
 export const WEB_SEARCH_TOOL = {
@@ -38,6 +41,24 @@ export const WEB_SEARCH_TOOL = {
         }
       },
       required: ['query']
+    }
+  }
+};
+
+export const READ_WEBPAGE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'read_webpage',
+    description: 'Читає та повертає повний текстовий вміст веб-сторінки за вказаним URL-посиланням. Використовуй, коли потрібно детально вивчити статтю, документацію чи обговорення на форумі.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Повна адреса веб-сторінки, наприклад https://example.com/article'
+        }
+      },
+      required: ['url']
     }
   }
 };
@@ -437,6 +458,75 @@ export function sanitizeConversationHistory(history: Message[], currentPrompt: s
   return trimmed;
 }
 
+const MAX_WEBPAGE_CHARS = 14000;
+
+function normalizeTargetUrl(rawUrl: string): string | null {
+  const trimmed = (rawUrl || '').trim().replace(/^["'<]+|["'>]+$/g, '');
+  if (!trimmed) return null;
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches clean readable text/markdown of any web page via Jina Reader API (https://r.jina.ai/<url>),
+ * truncates to MAX_WEBPAGE_CHARS to stay within model context limits, and returns friendly errors on blocks.
+ */
+export async function executeReadWebpage(
+  rawUrl: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const normalizedUrl = normalizeTargetUrl(rawUrl);
+  if (!normalizedUrl) {
+    return 'Помилка: не вдалося завантажити вміст сторінки (некоректне або порожнє URL-посилання).';
+  }
+
+  const jinaEndpoint = `https://r.jina.ai/${normalizedUrl}`;
+  const { signal: fetchSignal, cleanup } = createFetchSignal(22000, signal);
+
+  try {
+    const res = await fetch(jinaEndpoint, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/plain',
+        'X-Return-Format': 'markdown'
+      },
+      signal: fetchSignal
+    });
+
+    if (!res.ok) {
+      const errDetail = await res.text().catch(() => '');
+      return `Помилка: не вдалося завантажити вміст сторінки (HTTP ${res.status}${errDetail ? `: ${errDetail.slice(0, 140)}` : ''}).`;
+    }
+
+    const rawText = (await res.text()).trim();
+    if (!rawText) {
+      return 'Помилка: не вдалося завантажити вміст сторінки (сервіс повернув порожню відповідь).';
+    }
+
+    const header = `Джерело: ${normalizedUrl}\n\n`;
+    const remainingLimit = Math.max(2000, MAX_WEBPAGE_CHARS - header.length);
+    if (rawText.length > remainingLimit) {
+      return `${header}${rawText.slice(0, remainingLimit)}\n\n[...Текст сторінки скорочено до ${MAX_WEBPAGE_CHARS} символів для економії контексту...]`;
+    }
+
+    return `${header}${rawText}`;
+  } catch (err: any) {
+    if (signal?.aborted) {
+      throw err;
+    }
+    const reason = err?.message || 'мережева помилка або сайт заблокував доступ';
+    return `Помилка: не вдалося завантажити вміст сторінки (${reason}).`;
+  } finally {
+    cleanup();
+  }
+}
+
 function buildInitialApiMessages(
   history: Message[],
   prompt: string,
@@ -450,7 +540,7 @@ function buildInitialApiMessages(
     systemParts.push(options.systemPrompt.trim());
   }
 
-  if (options?.webSearchEnabled || (options?.systemPrompt && options.systemPrompt.trim())) {
+  if (options?.webSearchEnabled || options?.webReaderEnabled || (options?.systemPrompt && options.systemPrompt.trim())) {
     const { kyivDateTime, isoDate, year } = getCurrentDateTimeContext();
     let contextBlock = `[Системний контекст актуальності]\nПоточна дата та час (Київ): ${kyivDateTime} (ISO: ${isoDate}).`;
     if (options?.webSearchEnabled) {
@@ -459,6 +549,12 @@ function buildInitialApiMessages(
         `\n- Якщо користувач запитує сьогоднішню дату, день тижня або поточний час — відповідай точно за вказаною вище датою (${kyivDateTime}).` +
         `\n- Для актуальних фактів, новин, курсів валют, погоди чи подій викликай \`web_search\` (за потреби додавай у пошуковий запит ${year} рік).` +
         `\n- Отримавши відповідь \`web_search\`, спирайся на її реальні дані (\`results\`, \`answers\`, \`officialNbuRates\`, \`currentDateTime\`) і наводь конкретні цифри та факти.`;
+    }
+    if (options?.webReaderEnabled) {
+      contextBlock +=
+        `\nУ тебе активний інструмент читання веб-сторінок \`read_webpage\`.` +
+        `\n- Викликай \`read_webpage(url)\`, коли користувач надає посилання або коли після \`web_search\` потрібно детально вивчити повний текст статті, документації чи обговорення.` +
+        `\n- Якщо \`read_webpage\` повернув повідомлення про помилку, чесно повідом користувача, що сторінку не вдалося прочитати, і не вигадуй її вміст.`;
     }
     systemParts.push(contextBlock);
   }
@@ -534,6 +630,28 @@ function parseToolQuery(rawArgs: string): string {
   }
 }
 
+function parseToolUrl(rawArgs: string): string {
+  try {
+    const parsed = JSON.parse(rawArgs || '{}');
+    if (typeof parsed.url === 'string') return parsed.url;
+    if (typeof parsed.link === 'string') return parsed.link;
+    if (typeof parsed.href === 'string') return parsed.href;
+    if (typeof parsed.page_url === 'string') return parsed.page_url;
+    return String(Object.values(parsed)[0] || '');
+  } catch {
+    const match = (rawArgs || '').match(/"(?:url|link|href|page_url)"\s*:\s*"([^"]+)"/);
+    if (match?.[1]) return match[1];
+    return (rawArgs || '').trim();
+  }
+}
+
+function getEnabledTools(options?: ChatRequestOptions): any[] {
+  const tools: any[] = [];
+  if (options?.webSearchEnabled) tools.push(WEB_SEARCH_TOOL);
+  if (options?.webReaderEnabled) tools.push(READ_WEBPAGE_TOOL);
+  return tools;
+}
+
 /**
  * Transforms cryptic JSON/upstream rate-limit errors into clear Ukrainian messages
  */
@@ -577,8 +695,10 @@ export async function streamChatResponse(
 ): Promise<string> {
   const workingMessages: any[] = buildInitialApiMessages(history, prompt, options);
   const executedQueries: string[] = [];
+  const executedReadUrls: string[] = [];
+  const activeTools = getEnabledTools(options);
 
-  const MAX_TOOL_ROUNDS = 3;
+  const MAX_TOOL_ROUNDS = 5;
   const MAX_RETRIES = 2;
   let lastError: any = null;
 
@@ -595,7 +715,7 @@ export async function streamChatResponse(
         let totalAccumulatedText = '';
 
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-          const enableToolsThisRound = !!options?.webSearchEnabled && round < MAX_TOOL_ROUNDS;
+          const enableToolsThisRound = activeTools.length > 0 && round < MAX_TOOL_ROUNDS;
 
           const requestBody: Record<string, any> = {
             model: modelId,
@@ -604,7 +724,7 @@ export async function streamChatResponse(
           };
 
           if (enableToolsThisRound) {
-            requestBody.tools = [WEB_SEARCH_TOOL];
+            requestBody.tools = activeTools;
             requestBody.tool_choice = 'auto';
           }
 
@@ -765,6 +885,23 @@ export async function streamChatResponse(
                   name: tc.function.name,
                   content: searchResultJson
                 });
+              } else if (tc.function.name === 'read_webpage') {
+                const targetUrl = parseToolUrl(tc.function.arguments);
+                options?.onStatusChange?.(`Читаю сторінку: ${targetUrl || '...'}`);
+
+                if (targetUrl && !executedReadUrls.includes(targetUrl)) {
+                  executedReadUrls.push(targetUrl);
+                  options?.onReadUrls?.([...executedReadUrls]);
+                }
+
+                const pageContent = await executeReadWebpage(targetUrl, signal);
+
+                roundMessages.push({
+                  role: 'tool',
+                  tool_call_id: tc.id,
+                  name: tc.function.name,
+                  content: pageContent
+                });
               } else {
                 roundMessages.push({
                   role: 'tool',
@@ -775,7 +912,7 @@ export async function streamChatResponse(
               }
             }
 
-            options?.onStatusChange?.('Аналізую знайдені дані...');
+            options?.onStatusChange?.('Аналізую отримані дані...');
             // Continue to next round so the model produces final answer with tool results
             continue;
           }
@@ -824,17 +961,19 @@ export async function generateChatResponse(
 ): Promise<string> {
   const workingMessages: any[] = buildInitialApiMessages(history, prompt, options);
   const executedQueries: string[] = [];
-  const MAX_TOOL_ROUNDS = 3;
+  const executedReadUrls: string[] = [];
+  const activeTools = getEnabledTools(options);
+  const MAX_TOOL_ROUNDS = 5;
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    const enableTools = !!options?.webSearchEnabled && round < MAX_TOOL_ROUNDS;
+    const enableTools = activeTools.length > 0 && round < MAX_TOOL_ROUNDS;
     const bodyPayload: Record<string, any> = {
       model: modelId,
       messages: workingMessages,
       stream: false
     };
     if (enableTools) {
-      bodyPayload.tools = [WEB_SEARCH_TOOL];
+      bodyPayload.tools = activeTools;
       bodyPayload.tool_choice = 'auto';
     }
 
@@ -878,9 +1017,33 @@ export async function generateChatResponse(
             name: tc.function.name,
             content: searchResultJson
           });
+        } else if (tc.function?.name === 'read_webpage') {
+          const targetUrl = parseToolUrl(tc.function.arguments || '{}');
+          options?.onStatusChange?.(`Читаю сторінку: ${targetUrl || '...'}`);
+
+          if (targetUrl && !executedReadUrls.includes(targetUrl)) {
+            executedReadUrls.push(targetUrl);
+            options?.onReadUrls?.([...executedReadUrls]);
+          }
+
+          const pageContent = await executeReadWebpage(targetUrl);
+
+          workingMessages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: tc.function.name,
+            content: pageContent
+          });
+        } else {
+          workingMessages.push({
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: tc.function?.name || 'unknown',
+            content: JSON.stringify({ error: `Невідомий інструмент: ${tc.function?.name}` })
+          });
         }
       }
-      options?.onStatusChange?.('Аналізую знайдені дані...');
+      options?.onStatusChange?.('Аналізую отримані дані...');
       continue;
     }
 
