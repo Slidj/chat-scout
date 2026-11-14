@@ -51,9 +51,208 @@ interface OpenAIToolCall {
   };
 }
 
+function createFetchSignal(timeoutMs: number, externalSignal?: AbortSignal): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('Час очікування запиту вичерпано')), timeoutMs);
+
+  const onExternalAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort(externalSignal.reason);
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', onExternalAbort);
+      }
+    }
+  };
+}
+
+function getCurrentDateTimeContext() {
+  const now = new Date();
+  let kyivDateTime = now.toISOString();
+  try {
+    kyivDateTime = new Intl.DateTimeFormat('uk-UA', {
+      timeZone: 'Europe/Kyiv',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(now);
+  } catch {}
+  return {
+    kyivDateTime,
+    isoDate: now.toISOString().split('T')[0],
+    year: now.getFullYear()
+  };
+}
+
+function isCurrencyRelatedQuery(query: string): boolean {
+  return /(курс|валют|нбу|долар|євро|злотий|злотих|фунт|гривн|usd|eur|pln|gbp|uah|chf|czk|jpy|nbu|exchange|rate)/i.test(query);
+}
+
+async function fetchLiveNbuRates(externalSignal?: AbortSignal): Promise<{
+  exchangeDate?: string;
+  rates: Array<{ code: string; name: string; rate: number }>;
+} | null> {
+  const { signal, cleanup } = createFetchSignal(6000, externalSignal);
+  try {
+    const res = await fetch('https://bank.gov.ua/NBUStatService/v1/statdirectory/exchange?json', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    const priorityCodes = new Set(['USD', 'EUR', 'PLN', 'GBP', 'CHF', 'CZK', 'CAD', 'TRY', 'JPY']);
+    const filtered = data
+      .filter((item: any) => priorityCodes.has(String(item.cc || '').toUpperCase()))
+      .map((item: any) => ({
+        code: String(item.cc),
+        name: String(item.txt || item.cc),
+        rate: Number(item.rate)
+      }));
+
+    return {
+      exchangeDate: data[0]?.exchangedate,
+      rates: filtered.length > 0 ? filtered : data.slice(0, 10).map((item: any) => ({
+        code: String(item.cc),
+        name: String(item.txt || item.cc),
+        rate: Number(item.rate)
+      }))
+    };
+  } catch {
+    return null;
+  } finally {
+    cleanup();
+  }
+}
+
+async function fetchTargetSearchJson(targetUrl: string, externalSignal?: AbortSignal): Promise<any> {
+  // 1. Direct browser fetch (succeeds if the search service sends CORS headers)
+  {
+    const { signal, cleanup } = createFetchSignal(8000, externalSignal);
+    try {
+      const res = await fetch(targetUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal
+      });
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if (res.ok && contentType.includes('application/json')) {
+        return await res.json();
+      }
+      if (res.ok) {
+        const text = await res.text();
+        try {
+          return JSON.parse(text);
+        } catch {}
+      }
+    } catch (err: any) {
+      if (externalSignal?.aborted) throw err;
+    } finally {
+      cleanup();
+    }
+  }
+
+  // 2. Local Node/Vite backend proxy (/api/web-search) when hosted on a server
+  {
+    const { signal, cleanup } = createFetchSignal(22000, externalSignal);
+    try {
+      const proxyRes = await fetch(`/api/web-search?url=${encodeURIComponent(targetUrl)}`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal
+      });
+      const contentType = (proxyRes.headers.get('content-type') || '').toLowerCase();
+      // Ignore static hosting HTML 404/SPA fallback responses (e.g. GitHub Pages)
+      if (proxyRes.ok && contentType.includes('application/json')) {
+        const parsed = await proxyRes.json();
+        if (parsed && !parsed.error) {
+          return parsed;
+        }
+      }
+    } catch (err: any) {
+      if (externalSignal?.aborted) throw err;
+    } finally {
+      cleanup();
+    }
+  }
+
+  // 3. CORS-enabled Jina Reader proxy (works on static hosts like GitHub Pages in Telegram Mini App)
+  {
+    const { signal, cleanup } = createFetchSignal(22000, externalSignal);
+    try {
+      const jinaRes = await fetch(`https://r.jina.ai/${targetUrl}`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal
+      });
+      if (jinaRes.ok) {
+        const wrapped = await jinaRes.json();
+        const innerContent = wrapped?.data?.content;
+        if (typeof innerContent === 'string' && innerContent.trim()) {
+          try {
+            return JSON.parse(innerContent);
+          } catch {
+            return { rawContent: innerContent.slice(0, 8000) };
+          }
+        }
+      }
+    } catch (err: any) {
+      if (externalSignal?.aborted) throw err;
+    } finally {
+      cleanup();
+    }
+  }
+
+  // 4. Emergency CORS-enabled fallback (DuckDuckGo HTML via Jina + Wikipedia) if custom search endpoint is down
+  {
+    const urlObj = new URL(targetUrl);
+    const q = urlObj.searchParams.get('q') || '';
+    if (q) {
+      const { signal, cleanup } = createFetchSignal(12000, externalSignal);
+      try {
+        const ddgRes = await fetch(`https://r.jina.ai/https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          signal
+        });
+        if (ddgRes.ok) {
+          const wrapped = await ddgRes.json();
+          if (typeof wrapped?.data?.content === 'string' && wrapped.data.content.trim()) {
+            return { fallbackSource: 'duckduckgo', rawContent: wrapped.data.content.slice(0, 8000) };
+          }
+        }
+      } catch (err: any) {
+        if (externalSignal?.aborted) throw err;
+      } finally {
+        cleanup();
+      }
+    }
+  }
+
+  throw new Error('Пошуковий сервіс тимчасово недоступний');
+}
+
 /**
  * Executes a web search request against the configured search service URL in JSON format.
- * Tries direct fetch first; falls back to /api/web-search proxy if browser CORS blocks direct access.
+ * Supports direct fetch, /api/web-search backend proxy, and CORS-enabled static-host proxy fallback,
+ * plus live official NBU exchange rate enrichment for currency queries.
  */
 export async function executeWebSearch(
   searchUrl: string,
@@ -63,49 +262,24 @@ export async function executeWebSearch(
   const cleanBase = (searchUrl || DEFAULT_SEARCH_URL).trim();
   const separator = cleanBase.includes('?') ? '&' : '?';
   const targetUrl = `${cleanBase}${separator}q=${encodeURIComponent(query)}&format=json`;
+  const { kyivDateTime, isoDate } = getCurrentDateTimeContext();
+
+  const shouldEnrichNbu = isCurrencyRelatedQuery(query);
+  const nbuPromise = shouldEnrichNbu ? fetchLiveNbuRates(signal) : Promise.resolve(null);
 
   let rawData: any = null;
+  let searchError: string | null = null;
 
-  // 1. Direct browser fetch
   try {
-    const res = await fetch(targetUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json'
-      },
-      signal
-    });
-    if (res.ok) {
-      rawData = await res.json();
-    } else {
-      throw new Error(`HTTP ${res.status}`);
+    rawData = await fetchTargetSearchJson(targetUrl, signal);
+  } catch (err: any) {
+    if (err?.name === 'AbortError' && signal?.aborted) {
+      throw err;
     }
-  } catch (directErr: any) {
-    if (directErr?.name === 'AbortError') {
-      throw directErr;
-    }
-    // 2. Fallback via local backend proxy (handles CORS restrictions if any)
-    try {
-      const proxyRes = await fetch(`/api/web-search?url=${encodeURIComponent(targetUrl)}`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal
-      });
-      if (!proxyRes.ok) {
-        const errBody = await proxyRes.json().catch(() => ({}));
-        throw new Error(errBody.error || `HTTP ${proxyRes.status}`);
-      }
-      rawData = await proxyRes.json();
-    } catch (proxyErr: any) {
-      if (proxyErr?.name === 'AbortError') {
-        throw proxyErr;
-      }
-      return JSON.stringify({
-        error: `Не вдалося виконати пошук: ${proxyErr?.message || directErr?.message || 'мережева помилка'}`,
-        query
-      });
-    }
+    searchError = err?.message || 'мережева помилка';
   }
+
+  const nbuData = await nbuPromise;
 
   // Format search JSON concisely for optimal LLM context consumption
   try {
@@ -118,14 +292,49 @@ export async function executeWebSearch(
       }));
       return JSON.stringify({
         query,
+        currentDateTime: kyivDateTime,
+        isoDate,
         ...(Array.isArray(rawData.answers) && rawData.answers.length > 0 ? { answers: rawData.answers.slice(0, 3) } : {}),
+        ...(Array.isArray(rawData.infoboxes) && rawData.infoboxes.length > 0 ? { infoboxes: rawData.infoboxes.slice(0, 2) } : {}),
+        ...(nbuData ? { officialNbuRates: nbuData } : {}),
         results: compactResults
       });
     }
-    const serialized = typeof rawData === 'string' ? rawData : JSON.stringify(rawData);
-    return serialized.slice(0, 12000);
+
+    if (rawData && typeof rawData === 'object') {
+      return JSON.stringify({
+        query,
+        currentDateTime: kyivDateTime,
+        isoDate,
+        ...(nbuData ? { officialNbuRates: nbuData } : {}),
+        ...rawData
+      }).slice(0, 12000);
+    }
+
+    if (nbuData) {
+      return JSON.stringify({
+        query,
+        currentDateTime: kyivDateTime,
+        isoDate,
+        officialNbuRates: nbuData,
+        results: []
+      });
+    }
+
+    return JSON.stringify({
+      error: `Не вдалося виконати пошук: ${searchError || 'порожня відповідь'}`,
+      query,
+      currentDateTime: kyivDateTime,
+      isoDate
+    });
   } catch {
-    return JSON.stringify({ query, results: [] });
+    return JSON.stringify({
+      query,
+      currentDateTime: kyivDateTime,
+      isoDate,
+      ...(nbuData ? { officialNbuRates: nbuData } : {}),
+      results: []
+    });
   }
 }
 
@@ -228,16 +437,87 @@ export function sanitizeConversationHistory(history: Message[], currentPrompt: s
   return trimmed;
 }
 
-function buildInitialApiMessages(history: Message[], prompt: string, systemPrompt?: string): any[] {
+function buildInitialApiMessages(
+  history: Message[],
+  prompt: string,
+  options?: ChatRequestOptions
+): any[] {
   const conversation = sanitizeConversationHistory(history, prompt);
   const messages: any[] = [];
-  if (systemPrompt && systemPrompt.trim()) {
+  const systemParts: string[] = [];
+
+  if (options?.systemPrompt && options.systemPrompt.trim()) {
+    systemParts.push(options.systemPrompt.trim());
+  }
+
+  if (options?.webSearchEnabled || (options?.systemPrompt && options.systemPrompt.trim())) {
+    const { kyivDateTime, isoDate, year } = getCurrentDateTimeContext();
+    let contextBlock = `[Системний контекст актуальності]\nПоточна дата та час (Київ): ${kyivDateTime} (ISO: ${isoDate}).`;
+    if (options?.webSearchEnabled) {
+      contextBlock +=
+        `\nУ тебе активний інструмент веб-пошуку \`web_search\`.` +
+        `\n- Якщо користувач запитує сьогоднішню дату, день тижня або поточний час — відповідай точно за вказаною вище датою (${kyivDateTime}).` +
+        `\n- Для актуальних фактів, новин, курсів валют, погоди чи подій викликай \`web_search\` (за потреби додавай у пошуковий запит ${year} рік).` +
+        `\n- Отримавши відповідь \`web_search\`, спирайся на її реальні дані (\`results\`, \`answers\`, \`officialNbuRates\`, \`currentDateTime\`) і наводь конкретні цифри та факти.`;
+    }
+    systemParts.push(contextBlock);
+  }
+
+  if (systemParts.length > 0) {
     messages.push({
       role: 'system',
-      content: systemPrompt.trim()
+      content: systemParts.join('\n\n')
     });
   }
+
   return [...messages, ...conversation];
+}
+
+function mergeStreamToolCalls(toolCallsMap: Map<number, OpenAIToolCall>, deltaToolCalls: any[]) {
+  for (const tc of deltaToolCalls) {
+    let targetIdx: number = typeof tc.index === 'number' ? tc.index : 0;
+
+    if (tc.id) {
+      // Check if an entry with this exact id already exists
+      let matchedById: number | null = null;
+      for (const [k, v] of toolCallsMap.entries()) {
+        if (v.id === tc.id) {
+          matchedById = k;
+          break;
+        }
+      }
+      if (matchedById !== null) {
+        targetIdx = matchedById;
+      } else if (toolCallsMap.has(targetIdx)) {
+        const existingAtIdx = toolCallsMap.get(targetIdx)!;
+        if (existingAtIdx.function.name && existingAtIdx.id !== tc.id) {
+          // Provider reused index 0 for a new tool call — allocate a fresh slot
+          targetIdx = Math.max(-1, ...Array.from(toolCallsMap.keys())) + 1;
+        }
+      }
+    }
+
+    const existing = toolCallsMap.get(targetIdx) || {
+      id: tc.id || `call_${Date.now()}_${targetIdx}`,
+      type: 'function',
+      function: { name: '', arguments: '' }
+    };
+    if (tc.id) existing.id = tc.id;
+    if (tc.function?.name) {
+      if (!existing.function.name) {
+        existing.function.name = tc.function.name;
+      } else if (
+        existing.function.name !== tc.function.name &&
+        !existing.function.name.endsWith(tc.function.name)
+      ) {
+        existing.function.name += tc.function.name;
+      }
+    }
+    if (tc.function?.arguments) {
+      existing.function.arguments += tc.function.arguments;
+    }
+    toolCallsMap.set(targetIdx, existing);
+  }
 }
 
 function parseToolQuery(rawArgs: string): string {
@@ -248,6 +528,8 @@ function parseToolQuery(rawArgs: string): string {
     if (typeof parsed.search_query === 'string') return parsed.search_query;
     return String(Object.values(parsed)[0] || '');
   } catch {
+    const match = (rawArgs || '').match(/"(?:query|q|search_query)"\s*:\s*"([^"]+)"/);
+    if (match?.[1]) return match[1];
     return (rawArgs || '').trim();
   }
 }
@@ -293,7 +575,7 @@ export async function streamChatResponse(
   signal?: AbortSignal,
   options?: ChatRequestOptions
 ): Promise<string> {
-  const workingMessages: any[] = buildInitialApiMessages(history, prompt, options?.systemPrompt);
+  const workingMessages: any[] = buildInitialApiMessages(history, prompt, options);
   const executedQueries: string[] = [];
 
   const MAX_TOOL_ROUNDS = 3;
@@ -400,18 +682,7 @@ export async function streamChatResponse(
 
             // 2. Collect streamed delta.tool_calls
             if (Array.isArray(delta?.tool_calls)) {
-              for (const tc of delta.tool_calls) {
-                const idx = typeof tc.index === 'number' ? tc.index : 0;
-                const existing = toolCallsMap.get(idx) || {
-                  id: tc.id || `call_${Date.now()}_${idx}`,
-                  type: 'function',
-                  function: { name: '', arguments: '' }
-                };
-                if (tc.id) existing.id = tc.id;
-                if (tc.function?.name) existing.function.name += tc.function.name;
-                if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
-                toolCallsMap.set(idx, existing);
-              }
+              mergeStreamToolCalls(toolCallsMap, delta.tool_calls);
             }
 
             // 3. Collect full message.tool_calls if non-delta SSE chunk
@@ -551,7 +822,7 @@ export async function generateChatResponse(
   history: Message[],
   options?: ChatRequestOptions
 ): Promise<string> {
-  const workingMessages: any[] = buildInitialApiMessages(history, prompt, options?.systemPrompt);
+  const workingMessages: any[] = buildInitialApiMessages(history, prompt, options);
   const executedQueries: string[] = [];
   const MAX_TOOL_ROUNDS = 3;
 
