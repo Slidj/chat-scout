@@ -16,3 +16,18 @@ export interface AiModel {
   apiModelId: string; // The actual ID to send to the Scout AI API
   tier?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 }
+
+export interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  systemPrompt: string;
+  modelId: string;
+  webSearchEnabled: boolean;
+  searchUrl: string;
+  color?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  createdBy?: string;
+}
+

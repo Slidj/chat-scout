@@ -151,12 +151,61 @@ export async function resolveMediaUrl(rawUrl: string): Promise<{
   }
 }
 
+export async function proxyWebSearch(targetUrl: string): Promise<{
+  ok: boolean;
+  status: number;
+  data?: any;
+  error?: string;
+}> {
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return { ok: false, status: 400, error: 'URL пошуку не вказано' };
+  }
+  try {
+    const parsed = new URL(targetUrl.trim());
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { ok: false, status: 400, error: 'Неприпустимий протокол URL' };
+    }
+    const response = await fetch(parsed.toString(), {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (compatible; ScoutAIAgent/1.0)'
+      },
+      signal: AbortSignal.timeout(25000)
+    });
+    const text = await response.text();
+    try {
+      const json = JSON.parse(text);
+      return { ok: response.ok, status: response.status, data: json };
+    } catch {
+      return { ok: response.ok, status: response.status, data: { raw: text.slice(0, 10000) } };
+    }
+  } catch (err: any) {
+    return { ok: false, status: 502, error: err?.message || 'Помилка запиту до пошукового сервісу' };
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
   app.use(express.json());
+
+  // Web search CORS fallback proxy endpoint
+  app.get('/api/web-search', async (req: Request, res: Response) => {
+    const targetUrl = (req.query.url as string) || '';
+    if (!targetUrl) {
+      res.status(400).json({ ok: false, error: 'Параметр url обов’язковий' });
+      return;
+    }
+    const result = await proxyWebSearch(targetUrl);
+    if (!result.ok && result.error) {
+      res.status(result.status || 502).json(result);
+      return;
+    }
+    res.json(result.data ?? result);
+  });
 
   // Resolver API Endpoint
   app.get('/api/resolve-media', async (req: Request, res: Response) => {

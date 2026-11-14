@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
   Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
-  Wallet, Mail, Gift, CreditCard, Trash2
+  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
@@ -10,13 +10,13 @@ import { AdminPanel } from './components/AdminPanel';
 import { TopupModal } from './components/TopupModal';
 import { CouponCardModal } from './components/CouponCardModal';
 import { AppPreloader } from './components/AppPreloader';
-import { Provider, AiModel } from './types';
+import { Provider, AiModel, Agent } from './types';
 import { fetchModels, Model } from './lib/api';
 import { 
   getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
   TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups,
   subscribePreloaderSettings, getCachedPreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS,
-  ChatSession, subscribeUserChats, deleteChatSession
+  ChatSession, subscribeUserChats, deleteChatSession, subscribeToAgents
 } from './lib/db';
 import { getTierClasses, getTierTextColor, getTierSubtextColor, resolveColorToHex } from './lib/utils';
 
@@ -53,6 +53,8 @@ export default function App() {
   // Data State
   const [providers, setProviders] = useState<Provider[]>([]);
   const [models, setModels] = useState<AiModel[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [activeAgent, setActiveAgent] = useState<Agent | null>(null);
   const [isLoadingData, setIsLoadingData] = useState(true);
 
   // Search & Navigation State
@@ -60,7 +62,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'home' | 'provider' | 'model'>('home');
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [selectedModelDetails, setSelectedModelDetails] = useState<AiModel | null>(null);
-  const [activeTab, setActiveTab] = useState<'providers' | 'models'>('providers');
+  const [activeTab, setActiveTab] = useState<'providers' | 'models' | 'agents'>('providers');
   
   // Api State
   const [apiModels, setApiModels] = useState<Model[]>([]);
@@ -178,6 +180,10 @@ export default function App() {
       }
     });
 
+    const unsubAgents = subscribeToAgents((liveAgents) => {
+      setAgents(liveAgents);
+    });
+
     if (window.location.search.includes('admin=true')) {
       isUserAdmin = true;
     }
@@ -190,6 +196,7 @@ export default function App() {
       unsubTopups();
       unsubChats();
       unsubPreloader();
+      unsubAgents();
     };
   }, []);
 
@@ -239,7 +246,22 @@ export default function App() {
       setIsSettingsOpen(true);
       return;
     }
+    setActiveAgent(null);
+    setActiveChatId(null);
     setActiveChatModelId(apiModelId);
+    setIsChatOpen(true);
+  };
+
+  const activateAgentForChat = (agent: Agent) => {
+    if (isUserBlocked) return;
+    if (!apiKey) {
+      alert("Будь ласка, введіть ваш персональний API ключ у налаштуваннях для початку чату з агентом.");
+      setIsSettingsOpen(true);
+      return;
+    }
+    setActiveAgent(agent);
+    setActiveChatModelId(agent.modelId);
+    setActiveChatId(null);
     setIsChatOpen(true);
   };
 
@@ -249,6 +271,7 @@ export default function App() {
       setIsSettingsOpen(true);
       return;
     }
+    setActiveAgent(null);
     if (!activeChatModelId && models.length > 0) {
       setActiveChatModelId(models[0].apiModelId);
     }
@@ -261,6 +284,15 @@ export default function App() {
     if (!apiKey) {
       setIsSettingsOpen(true);
       return;
+    }
+    if (chat.agentId) {
+      const matchedAgent = agents.find(a => a.id === chat.agentId) || null;
+      setActiveAgent(matchedAgent);
+    } else {
+      setActiveAgent(null);
+    }
+    if (chat.modelId) {
+      setActiveChatModelId(chat.modelId);
     }
     setActiveChatId(chat.id);
     setIsChatOpen(true);
@@ -281,7 +313,7 @@ export default function App() {
     }
   };
 
-  // Filtered providers and models based on search
+  // Filtered providers, models, and agents based on search
   const filteredProviders = providers.filter(p => 
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     p.description.toLowerCase().includes(searchQuery.toLowerCase())
@@ -292,6 +324,16 @@ export default function App() {
     m.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
     m.apiModelId.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const filteredAgents = agents.filter(a => {
+    const q = searchQuery.toLowerCase();
+    return (
+      a.name.toLowerCase().includes(q) ||
+      (a.description || '').toLowerCase().includes(q) ||
+      a.systemPrompt.toLowerCase().includes(q) ||
+      a.modelId.toLowerCase().includes(q)
+    );
+  });
 
   const enrichedChatModels = models.length > 0
     ? models
@@ -446,11 +488,11 @@ export default function App() {
         {currentView === 'home' && (
           <div className="space-y-6 animate-in fade-in duration-200">
             
-            {/* View Selector Tabs: Providers vs Models */}
-            <div className="flex items-center gap-2 border-b border-[#2C2A26] pb-2">
+            {/* View Selector Tabs: Providers vs Models vs Agents */}
+            <div className="flex items-center gap-2 border-b border-[#2C2A26] pb-2 overflow-x-auto no-scrollbar">
               <button
                 onClick={() => setActiveTab('providers')}
-                className={`text-sm font-medium px-3 py-1.5 rounded-full transition-colors ${
+                className={`text-sm font-medium px-3 py-1.5 rounded-full transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === 'providers' 
                     ? 'bg-[#2E2C29] text-[#ECE8E1] font-semibold border border-[#3A3834]' 
                     : 'text-[#8A8780] hover:text-[#ECE8E1]'
@@ -460,13 +502,24 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveTab('models')}
-                className={`text-sm font-medium px-3 py-1.5 rounded-full transition-colors ${
+                className={`text-sm font-medium px-3 py-1.5 rounded-full transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === 'models' 
                     ? 'bg-[#2E2C29] text-[#ECE8E1] font-semibold border border-[#3A3834]' 
                     : 'text-[#8A8780] hover:text-[#ECE8E1]'
                 }`}
               >
                 Всі Моделі ({filteredModels.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('agents')}
+                className={`text-sm font-medium px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                  activeTab === 'agents' 
+                    ? 'bg-[#2E2C29] text-[#ECE8E1] font-semibold border border-[#3A3834]' 
+                    : 'text-[#8A8780] hover:text-[#ECE8E1]'
+                }`}
+              >
+                <Bot size={14} className={activeTab === 'agents' ? 'text-[#CC785C]' : ''} />
+                <span>Агенти ({filteredAgents.length})</span>
               </button>
             </div>
 
@@ -516,6 +569,88 @@ export default function App() {
                           <span className="text-[11px] text-[#7A776F] mt-2 font-medium">
                             {modelCount} {modelCount === 1 ? 'модель' : 'моделей'}
                           </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+            ) : activeTab === 'agents' ? (
+
+              /* Custom AI Agents List (LibreChat style) */
+              <div>
+                {filteredAgents.length === 0 ? (
+                  <div className="text-center py-12 px-4 bg-[#242320] rounded-3xl border border-[#363430] space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-[#2E2420] text-[#CC785C] flex items-center justify-center mx-auto">
+                      <Bot size={24} />
+                    </div>
+                    <p className="text-sm font-medium text-[#ECE8E1]">Агентів поки не знайдено</p>
+                    <p className="text-xs text-[#8A8780] max-w-xs mx-auto">
+                      {searchQuery
+                        ? 'Спробуйте змінити пошуковий запит.'
+                        : 'Адміністратор ще не створив спеціалізованих ШІ-агентів.'}
+                    </p>
+                    {isAdmin && (
+                      <button
+                        onClick={() => setIsAdminOpen(true)}
+                        className="bg-[#CC785C] hover:bg-[#D97757] text-white px-4 py-2 rounded-xl text-xs font-semibold transition-colors"
+                      >
+                        Створити в адмінці
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    {filteredAgents.map(agent => {
+                      const hexColor = resolveColorToHex(agent.color || '#CC785C');
+                      return (
+                        <div
+                          key={agent.id}
+                          onClick={() => activateAgentForChat(agent)}
+                          className="group cursor-pointer bg-[#242320] hover:bg-[#2A2926] rounded-3xl p-4 sm:p-5 border border-[#363430] hover:border-[#CC785C]/50 shadow-xs hover:shadow-md transition-all flex flex-col justify-between gap-3.5"
+                        >
+                          <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div
+                                  style={{ backgroundColor: hexColor }}
+                                  className="w-12 h-12 rounded-2xl text-white flex items-center justify-center shadow-md shrink-0 group-hover:scale-105 transition-transform"
+                                >
+                                  <Bot size={24} />
+                                </div>
+                                <div className="min-w-0">
+                                  <h3 className="font-semibold text-[#ECE8E1] text-base truncate group-hover:text-white transition-colors">
+                                    {agent.name}
+                                  </h3>
+                                  <span className="inline-block text-[11px] font-mono text-[#CC785C] bg-[#2D221D] px-2 py-0.5 rounded-md border border-[#463128] mt-1 truncate max-w-[190px]">
+                                    {agent.modelId}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {agent.webSearchEnabled && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-[10px] font-semibold text-emerald-300 shrink-0">
+                                  <Globe size={10} />
+                                  <span>Web</span>
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="text-xs text-[#9E9A92] line-clamp-2 leading-relaxed">
+                              {agent.description || agent.systemPrompt}
+                            </p>
+                          </div>
+
+                          <div className="pt-2.5 border-t border-[#312F2B] flex items-center justify-between text-xs">
+                            <span className="text-[#7E7B74]">
+                              {agent.webSearchEnabled ? 'Підтримує веб-пошук' : 'Системні інструкції'}
+                            </span>
+                            <span className="text-[#CC785C] font-semibold flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
+                              <span>Відкрити чат</span>
+                              <ArrowRight size={13} />
+                            </span>
+                          </div>
                         </div>
                       );
                     })}
@@ -746,6 +881,25 @@ export default function App() {
               </div>
 
               <div 
+                onClick={() => { goHome(); setActiveTab('agents'); setIsDrawerOpen(false); }}
+                className={`flex items-center justify-between px-3.5 py-2.5 rounded-2xl cursor-pointer transition-colors text-sm font-medium ${
+                  currentView === 'home' && activeTab === 'agents' && !isChatOpen
+                    ? 'bg-[#2E2C29] text-[#ECE8E1]'
+                    : 'text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Bot size={18} className="text-[#CC785C]" />
+                  <span>Агенти</span>
+                </div>
+                {agents.length > 0 && (
+                  <span className="text-[10px] font-mono text-[#8A8780] bg-[#22201D] px-2 py-0.5 rounded-full border border-[#34322E]">
+                    {agents.length}
+                  </span>
+                )}
+              </div>
+
+              <div 
                 onClick={() => { handleStartNewChat(); setIsDrawerOpen(false); }}
                 className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl cursor-pointer transition-colors text-sm font-medium text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]"
               >
@@ -902,6 +1056,9 @@ export default function App() {
         unreadCouponsCount={unreadCouponsCount}
         onOpenCoupons={() => setIsCouponModalOpen(true)}
         activeChatId={activeChatId}
+        activeAgent={activeAgent}
+        agents={agents}
+        onSelectAgent={setActiveAgent}
       />
 
       {/* Settings Modal */}

@@ -2,8 +2,55 @@ import {
   collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc, 
   onSnapshot, query, orderBy, limit, increment, Unsubscribe, where 
 } from 'firebase/firestore';
-import { db } from './firebase';
-import { Provider, AiModel } from '../types';
+import { db, auth } from './firebase';
+import { Provider, AiModel, Agent } from '../types';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 /**
  * Sanitizes object prior to Firestore write by removing keys with `undefined` values.
@@ -15,6 +62,14 @@ export function sanitizeForFirestore<T extends Record<string, any>>(data: T): Re
     if (value !== undefined) {
       if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
         clean[key] = sanitizeForFirestore(value);
+      } else if (Array.isArray(value)) {
+        clean[key] = value
+          .filter(item => item !== undefined)
+          .map(item =>
+            item !== null && typeof item === 'object' && !Array.isArray(item) && !(item instanceof Date)
+              ? sanitizeForFirestore(item)
+              : item
+          );
       } else {
         clean[key] = value;
       }
@@ -325,6 +380,8 @@ export interface ChatSession {
   userId: string;
   title: string;
   modelId: string;
+  agentId?: string;
+  agentName?: string;
   messages: any[];
   createdAt: string | number;
   updatedAt: string | number;
@@ -342,10 +399,11 @@ export const saveChatSession = async (session: Omit<ChatSession, 'expiresAt'>): 
   try {
     const expiresAt = new Date(Date.now() + CHAT_RETENTION_MS).toISOString();
     const chatRef = doc(db, 'chats', session.id);
-    await setDoc(chatRef, {
+    const payload = sanitizeForFirestore({
       ...session,
       expiresAt
-    }, { merge: true });
+    });
+    await setDoc(chatRef, payload, { merge: true });
   } catch (e) {
     console.error('Error saving chat session:', e);
   }
@@ -797,6 +855,100 @@ export const subscribePreloaderSettings = (
     callback(DEFAULT_PRELOADER_SETTINGS);
   });
 };
+
+// -------------------------------------------------------------
+// Custom AI Agents (LibreChat-style)
+// -------------------------------------------------------------
+export const DEFAULT_AGENT_SEARCH_URL = 'https://search-engine-el09.onrender.com/search';
+
+export const getAgents = async (): Promise<Agent[]> => {
+  try {
+    const snapshot = await getDocs(collection(db, 'agents'));
+    const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Agent));
+    list.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, 'agents');
+  }
+};
+
+export const subscribeToAgents = (callback: (agents: Agent[]) => void): Unsubscribe => {
+  const agentsRef = collection(db, 'agents');
+  return onSnapshot(agentsRef, (snapshot) => {
+    const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Agent));
+    list.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+    callback(list);
+  }, (error) => {
+    console.warn('Agents subscription error:', error);
+    try {
+      handleFirestoreError(error, OperationType.LIST, 'agents');
+    } catch {
+      callback([]);
+    }
+  });
+};
+
+export const saveAgent = async (
+  agent: Omit<Agent, 'id' | 'createdAt' | 'updatedAt'>,
+  adminName?: string
+): Promise<Agent> => {
+  const now = new Date().toISOString();
+  const payload = sanitizeForFirestore({
+    ...agent,
+    searchUrl: (agent.searchUrl || DEFAULT_AGENT_SEARCH_URL).trim(),
+    createdAt: now,
+    updatedAt: now,
+    createdBy: adminName || 'Admin'
+  });
+
+  try {
+    const docRef = await addDoc(collection(db, 'agents'), payload);
+    await logActivityEvent({
+      type: 'admin_action',
+      description: `Створено агента «${agent.name}» (модель: ${agent.modelId})`,
+      user: adminName || 'Admin'
+    }).catch(console.warn);
+
+    return { ...payload, id: docRef.id } as Agent;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'agents');
+  }
+};
+
+export const updateAgent = async (agent: Agent, adminName?: string): Promise<void> => {
+  const { id, ...rest } = agent;
+  const now = new Date().toISOString();
+  const payload = sanitizeForFirestore({
+    ...rest,
+    searchUrl: (rest.searchUrl || DEFAULT_AGENT_SEARCH_URL).trim(),
+    updatedAt: now
+  });
+
+  try {
+    await setDoc(doc(db, 'agents', id), payload, { merge: true });
+    await logActivityEvent({
+      type: 'admin_action',
+      description: `Оновлено агента «${agent.name}»`,
+      user: adminName || 'Admin'
+    }).catch(console.warn);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `agents/${id}`);
+  }
+};
+
+export const deleteAgent = async (id: string, agentName?: string, adminName?: string): Promise<void> => {
+  try {
+    await deleteDoc(doc(db, 'agents', id));
+    await logActivityEvent({
+      type: 'admin_action',
+      description: `Видалено агента ${agentName ? `«${agentName}»` : id}`,
+      user: adminName || 'Admin'
+    }).catch(console.warn);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `agents/${id}`);
+  }
+};
+
 
 
 

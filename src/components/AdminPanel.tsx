@@ -7,10 +7,11 @@ import {
   AppUser, ActivityEvent, QueryLog, logActivityEvent,
   TopupRequest, subscribeToTopups, updateTopupStatus, sendCouponToUser,
   subscribePaymentSettings, updatePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS,
-  subscribePreloaderSettings, updatePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS
+  subscribePreloaderSettings, updatePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS,
+  subscribeToAgents, saveAgent, updateAgent, deleteAgent, DEFAULT_AGENT_SEARCH_URL
 } from '../lib/db';
 import { fetchModels, resolveMediaLink } from '../lib/api';
-import { Provider, AiModel } from '../types';
+import { Provider, AiModel, Agent } from '../types';
 import { AppPreloader } from './AppPreloader';
 import { 
   Plus, Edit2, Edit3, Trash2, X, Upload, Check, Palette, Shield, 
@@ -20,11 +21,11 @@ import {
   UserCheck, ArrowUpRight, Copy, Ban, Unlock, ChevronLeft,
   ChevronsLeft, ChevronsRight, Info, CreditCard, Gift, Send,
   ExternalLink, FileText, Image as ImageIcon, CheckCircle, XCircle,
-  Film, Play, Waves, Sliders, Volume2, MonitorPlay
+  Film, Play, Waves, Sliders, Volume2, MonitorPlay, Bot
 } from 'lucide-react';
 import { resolveColorToHex, COLOR_PRESETS, ColorPreset, resizeImageFile, getTierClasses } from '../lib/utils';
 
-type AdminTab = 'dashboard' | 'providers' | 'models' | 'api-keys' | 'users' | 'topups' | 'preloader';
+type AdminTab = 'dashboard' | 'agents' | 'providers' | 'models' | 'api-keys' | 'users' | 'topups' | 'preloader';
 type DrillDownModal = null | 'all_users' | 'active_today' | 'queries_detail' | 'models_overview' | 'chart_point' | 'provider_detail';
 
 interface AdminPanelProps {
@@ -41,11 +42,17 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   // Real-time Data State from Firestore
   const [providers, setProviders] = useState<Provider[]>([]);
   const [models, setModels] = useState<AiModel[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [queries, setQueries] = useState<QueryLog[]>([]);
   const [activities, setActivities] = useState<ActivityEvent[]>([]);
   const [topups, setTopups] = useState<TopupRequest[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Agents Search & Modal State
+  const [agentSearch, setAgentSearch] = useState('');
+  const [isAddingAgent, setIsAddingAgent] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
 
   // Top-up & Coupon Management State
   const [topupFilter, setTopupFilter] = useState<'all' | 'pending' | 'completed' | 'rejected'>('all');
@@ -137,7 +144,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
   // 1. Initial Load & Realtime Subscriptions
   useEffect(() => {
-    const savedKey = localStorage.getItem('adminApiKey');
+    const savedKey = localStorage.getItem('adminApiKey') || localStorage.getItem('app_api_key') || '';
     if (savedKey) {
       setAdminApiKey(savedKey);
       fetchModels(savedKey).then(setAdminApiModels).catch(console.error);
@@ -150,6 +157,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     const unsubQueries = subscribeToQueries((liveQueries) => setQueries(liveQueries));
     const unsubActivities = subscribeToActivities((liveActs) => setActivities(liveActs));
     const unsubTopups = subscribeToTopups((liveTopups) => setTopups(liveTopups));
+    const unsubAgents = subscribeToAgents((liveAgents) => setAgents(liveAgents));
     const unsubPayment = subscribePaymentSettings((settings) => {
       setPaymentSettings(settings);
       setCardFormNumber(settings.cardNumber);
@@ -176,6 +184,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       unsubQueries();
       unsubActivities();
       unsubTopups();
+      unsubAgents();
       unsubPayment();
       unsubPreloader();
     };
@@ -761,6 +770,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
   const navItems = [
     { id: 'dashboard' as AdminTab, label: 'Дашборд', icon: LayoutDashboard, badge: null, desc: 'Жива статистика та аналітика' },
+    { id: 'agents' as AdminTab, label: 'Керування агентами', icon: Bot, badge: agents.length, desc: 'Промпти, моделі та веб-пошук' },
     { id: 'topups' as AdminTab, label: 'Поповнення & Купони', icon: CreditCard, badge: pendingTopupsCount > 0 ? pendingTopupsCount : null, desc: 'Перевірка чеків, видача купонів' },
     { id: 'preloader' as AdminTab, label: 'Прелоадер & Заставка', icon: Film, badge: null, desc: 'Pinterest відео, GIF, хвиля' },
     { id: 'users' as AdminTab, label: 'Користувачі', icon: Users, badge: users.length, desc: 'Акаунти, блокування, сторінки' },
@@ -1653,6 +1663,160 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     );
                   })}
               </div>
+            </div>
+          )}
+
+          {/* TAB: CUSTOM AI AGENTS (LIBRECHAT STYLE) */}
+          {activeTab === 'agents' && (
+            <div className="space-y-6 animate-fadeIn">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#242320] p-5 rounded-3xl border border-[#363430]">
+                <div>
+                  <h2 className="text-lg font-bold text-[#ECE8E1] flex items-center gap-2">
+                    <Bot size={20} className="text-[#CC785C]" />
+                    <span>Керування агентами ({agents.length})</span>
+                  </h2>
+                  <p className="text-xs text-[#8E8B83] mt-0.5">
+                    Створюйте спеціалізованих ШІ-агентів (LibreChat) із системними інструкціями та автономним веб-пошуком
+                  </p>
+                </div>
+
+                <button 
+                  onClick={() => setIsAddingAgent(true)} 
+                  className="flex items-center gap-1.5 bg-[#FAF8F5] hover:bg-white text-black font-semibold text-xs px-4 py-2.5 rounded-2xl transition-all shadow-md active:scale-95 self-start sm:self-auto"
+                >
+                  <Plus size={16} />
+                  <span>Створити агента</span>
+                </button>
+              </div>
+
+              <div className="relative">
+                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#7E7B74]" />
+                <input 
+                  type="text"
+                  placeholder="Пошук агента за назвою, інструкцією або моделлю..."
+                  value={agentSearch}
+                  onChange={e => setAgentSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-[#201F1C] border border-[#35332F] rounded-2xl text-xs sm:text-sm text-[#ECE8E1] placeholder-[#6E6B64] focus:outline-none focus:border-[#CC785C]"
+                />
+              </div>
+
+              {agents.length === 0 ? (
+                <div className="bg-[#242320] border border-dashed border-[#3B3832] rounded-3xl p-10 text-center space-y-3">
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-[#2E2420] text-[#CC785C] flex items-center justify-center">
+                    <Bot size={28} />
+                  </div>
+                  <h3 className="text-base font-bold text-[#ECE8E1]">Ще немає жодного агента</h3>
+                  <p className="text-xs text-[#8E8B83] max-w-md mx-auto leading-relaxed">
+                    Створіть вашого першого кастомного агента: задайте йому назву, системний промпт, оберіть модель із New API (`scout-ai.pp.ua`) та за потреби увімкніть веб-пошук.
+                  </p>
+                  <button
+                    onClick={() => setIsAddingAgent(true)}
+                    className="inline-flex items-center gap-1.5 bg-[#CC785C] hover:bg-[#D97757] text-white font-semibold text-xs px-4 py-2.5 rounded-2xl shadow-md transition-all active:scale-95"
+                  >
+                    <Plus size={15} />
+                    <span>Додати першого агента</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {agents
+                    .filter(a => {
+                      const q = agentSearch.toLowerCase();
+                      return (
+                        a.name.toLowerCase().includes(q) ||
+                        a.modelId.toLowerCase().includes(q) ||
+                        a.systemPrompt.toLowerCase().includes(q)
+                      );
+                    })
+                    .map(agent => {
+                      const accentHex = resolveColorToHex(agent.color || '#CC785C');
+                      return (
+                        <div
+                          key={agent.id}
+                          className="bg-[#242320] p-5 rounded-3xl border border-[#363430] hover:border-[#4E4A43] flex flex-col justify-between gap-4 shadow-xs transition-all"
+                        >
+                          <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div
+                                  style={{ backgroundColor: accentHex }}
+                                  className="w-11 h-11 rounded-2xl text-white flex items-center justify-center shadow-md shrink-0"
+                                >
+                                  <Bot size={22} />
+                                </div>
+                                <div className="min-w-0">
+                                  <h4 className="font-bold text-base text-[#ECE8E1] truncate">{agent.name}</h4>
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    <span className="text-[11px] font-mono text-[#CC785C] bg-[#2E2420] px-2 py-0.5 rounded-md border border-[#483329] truncate max-w-[200px]">
+                                      {agent.modelId}
+                                    </span>
+                                    {agent.webSearchEnabled ? (
+                                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-950/60 text-emerald-300 border border-emerald-800/50">
+                                        <Globe size={10} />
+                                        Веб-пошук увімкнено
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-[#1C1B18] text-[#7E7B74] border border-[#2F2D29]">
+                                        Без веб-пошуку
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={() => setEditingAgent(agent)}
+                                  className="p-2 rounded-xl text-[#8E8B83] hover:text-[#ECE8E1] hover:bg-[#302E2A] transition-colors"
+                                  title="Редагувати агента"
+                                >
+                                  <Edit2 size={16} />
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    if (confirm(`Видалити агента «${agent.name}»?`)) {
+                                      try {
+                                        await deleteAgent(agent.id, agent.name, currentUser?.first_name || 'Admin');
+                                      } catch (err: any) {
+                                        alert('Помилка видалення: ' + err.message);
+                                      }
+                                    }
+                                  }}
+                                  className="p-2 rounded-xl text-[#8E8B83] hover:text-red-400 hover:bg-red-950/20 transition-colors"
+                                  title="Видалити агента"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+
+                            {agent.description && (
+                              <p className="text-xs text-[#C5C2BA] leading-relaxed">
+                                {agent.description}
+                              </p>
+                            )}
+
+                            <div className="bg-[#1B1A17] border border-[#2F2D29] rounded-2xl p-3">
+                              <div className="text-[10px] uppercase font-semibold tracking-wider text-[#7A7770] mb-1">
+                                Системний промпт
+                              </div>
+                              <p className="text-xs text-[#9E9A92] line-clamp-3 font-mono leading-relaxed whitespace-pre-wrap">
+                                {agent.systemPrompt}
+                              </p>
+                            </div>
+
+                            {agent.webSearchEnabled && (
+                              <div className="text-[11px] text-[#7E7B74] flex items-center gap-1.5 truncate">
+                                <Globe size={12} className="text-emerald-400 shrink-0" />
+                                <span className="font-mono truncate">{agent.searchUrl || DEFAULT_AGENT_SEARCH_URL}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           )}
 
@@ -3535,6 +3699,28 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
         />
       )}
 
+      {(isAddingAgent || editingAgent) && (
+        <AgentFormModal
+          agent={editingAgent}
+          apiModels={adminApiModels}
+          catalogModels={models}
+          adminApiKey={adminApiKey}
+          onRefreshApiModels={handleLoadAdminModels}
+          isRefreshingModels={isTestingKey}
+          onClose={() => { setIsAddingAgent(false); setEditingAgent(null); }}
+          onSave={async (agentData: Omit<Agent, 'id'>) => {
+            const adminName = currentUser?.first_name || currentUser?.username || 'Admin';
+            if (editingAgent) {
+              await updateAgent({ ...agentData, id: editingAgent.id }, adminName);
+            } else {
+              await saveAgent(agentData, adminName);
+            }
+            setIsAddingAgent(false);
+            setEditingAgent(null);
+          }}
+        />
+      )}
+
       {/* Reply & Send Coupon Modal */}
       {selectedTopupForReply && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-200">
@@ -4162,6 +4348,321 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// Agent Form Modal (LibreChat-style Custom AI Agent Editor)
+// -------------------------------------------------------------
+function AgentFormModal({
+  agent,
+  apiModels,
+  catalogModels,
+  adminApiKey,
+  onRefreshApiModels,
+  isRefreshingModels,
+  onClose,
+  onSave
+}: {
+  agent: Agent | null;
+  apiModels: { id: string; name: string }[];
+  catalogModels: AiModel[];
+  adminApiKey: string;
+  onRefreshApiModels: () => Promise<void>;
+  isRefreshingModels: boolean;
+  onClose: () => void;
+  onSave: (agentData: Omit<Agent, 'id'>) => Promise<void>;
+}) {
+  // Combine unique models from New API (/models) and Firestore catalog
+  const availableModels = useMemo(() => {
+    const map = new Map<string, { id: string; label: string }>();
+    for (const m of apiModels || []) {
+      if (m.id) map.set(m.id, { id: m.id, label: m.name || m.id });
+    }
+    for (const cm of catalogModels || []) {
+      if (cm.apiModelId && !map.has(cm.apiModelId)) {
+        map.set(cm.apiModelId, { id: cm.apiModelId, label: `${cm.name} (${cm.apiModelId})` });
+      }
+    }
+    return Array.from(map.values());
+  }, [apiModels, catalogModels]);
+
+  const [name, setName] = useState(agent?.name || '');
+  const [description, setDescription] = useState(agent?.description || '');
+  const [systemPrompt, setSystemPrompt] = useState(agent?.systemPrompt || '');
+  const [modelId, setModelId] = useState(
+    agent?.modelId || (availableModels.length > 0 ? availableModels[0].id : '')
+  );
+  const [useCustomModelInput, setUseCustomModelInput] = useState<boolean>(
+    availableModels.length === 0 || (!!agent?.modelId && !availableModels.some(m => m.id === agent.modelId))
+  );
+  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(agent?.webSearchEnabled ?? false);
+  const [searchUrl, setSearchUrl] = useState<string>(agent?.searchUrl || DEFAULT_AGENT_SEARCH_URL);
+  const [color, setColor] = useState<string>(agent?.color || '#CC785C');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const agentColors = ['#CC785C', '#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EC4899'];
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !systemPrompt.trim() || !modelId.trim()) return;
+
+    setIsSubmitting(true);
+    try {
+      await onSave({
+        name: name.trim(),
+        description: description.trim(),
+        systemPrompt: systemPrompt.trim(),
+        modelId: modelId.trim(),
+        webSearchEnabled,
+        searchUrl: (searchUrl || DEFAULT_AGENT_SEARCH_URL).trim(),
+        color
+      });
+    } catch (err: any) {
+      alert('Помилка збереження агента: ' + (err.message || 'невідома помилка'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 backdrop-blur-xs px-3 sm:px-4"
+      style={{ paddingTop: 'calc(4rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.25rem + var(--safe-bottom, 0px))' }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="bg-[#242320] text-[#ECE8E1] p-5 sm:p-6 rounded-3xl w-full max-w-lg shadow-2xl border border-[#383632] max-h-full overflow-y-auto space-y-4"
+      >
+        {/* Modal Header */}
+        <div className="flex justify-between items-center border-b border-[#33312D] pb-3">
+          <div className="flex items-center gap-2.5">
+            <div
+              style={{ backgroundColor: resolveColorToHex(color) }}
+              className="w-9 h-9 rounded-xl text-white flex items-center justify-center shadow-sm"
+            >
+              <Bot size={18} />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-[#ECE8E1]">
+                {agent ? 'Редагувати агента' : 'Створити ШІ-агента'}
+              </h3>
+              <p className="text-[11px] text-[#8E8B83]">
+                Конфігурація у стилі LibreChat + Tool Calling
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-full text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#302E2A] transition-colors"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Agent Name */}
+        <div>
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
+            Назва агента (Name) *
+          </label>
+          <input
+            required
+            type="text"
+            className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]"
+            placeholder="Напр. Новинний аналітик, Код-рев'юер, Крипто-помічник"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+
+        {/* Short Description */}
+        <div>
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
+            Короткий опис (для картки користувача)
+          </label>
+          <input
+            type="text"
+            className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]"
+            placeholder="Коротко опишіть призначення агента..."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+
+        {/* Model Selector */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider">
+              Модель (New API) *
+            </label>
+            <div className="flex items-center gap-2">
+              {adminApiKey && (
+                <button
+                  type="button"
+                  onClick={onRefreshApiModels}
+                  disabled={isRefreshingModels}
+                  className="text-[11px] text-[#CC785C] hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw size={11} className={isRefreshingModels ? 'animate-spin' : ''} />
+                  <span>Оновити з API</span>
+                </button>
+              )}
+              {availableModels.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setUseCustomModelInput(!useCustomModelInput)}
+                  className="text-[11px] text-[#9E9A92] hover:text-[#ECE8E1] underline"
+                >
+                  {useCustomModelInput ? 'Вибрати зі списку' : 'Ввести вручну'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {!useCustomModelInput && availableModels.length > 0 ? (
+            <select
+              required
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] rounded-xl focus:outline-none focus:border-[#CC785C]"
+            >
+              <option value="" disabled>Оберіть модель із scout-ai.pp.ua</option>
+              {availableModels.map(m => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              required
+              type="text"
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              placeholder="Напр. gpt-4o, gemini-2.5-flash, claude-3.5-sonnet"
+              className="w-full p-2.5 text-sm font-mono border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]"
+            />
+          )}
+        </div>
+
+        {/* System Prompt */}
+        <div>
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
+            Системний промпт / інструкції (System Prompt) *
+          </label>
+          <textarea
+            required
+            rows={5}
+            className="w-full p-3 text-xs sm:text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C] leading-relaxed resize-y"
+            placeholder="Ти — професійний AI-асистент... Відповідай українською, використовуй веб-пошук для перевірки актуальних фактів..."
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+          />
+        </div>
+
+        {/* Web Search Toggle & Search URL */}
+        <div className="bg-[#1B1A17] border border-[#32302B] rounded-2xl p-4 space-y-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                webSearchEnabled ? 'bg-emerald-950/70 text-emerald-400 border border-emerald-800/50' : 'bg-[#262522] text-[#7E7B74]'
+              }`}>
+                <Globe size={18} />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-[#ECE8E1]">Увімкнути веб-пошук</div>
+                <div className="text-[11px] text-[#8E8B83]">
+                  Додає інструмент <code className="text-[#CC785C]">web_search(query)</code> через Tool Calling
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={webSearchEnabled}
+              onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+              className={`w-12 h-6.5 rounded-full transition-colors relative shrink-0 ${
+                webSearchEnabled ? 'bg-emerald-500' : 'bg-[#3C3934]'
+              }`}
+            >
+              <span
+                className={`block w-5 h-5 bg-white rounded-full shadow-sm transition-transform transform ${
+                  webSearchEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className={`space-y-1.5 transition-opacity ${webSearchEnabled ? 'opacity-100' : 'opacity-55'}`}>
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-semibold text-[#9E9A92] uppercase tracking-wider">
+                URL пошукового сервісу
+              </label>
+              {searchUrl !== DEFAULT_AGENT_SEARCH_URL && (
+                <button
+                  type="button"
+                  onClick={() => setSearchUrl(DEFAULT_AGENT_SEARCH_URL)}
+                  className="text-[11px] text-[#CC785C] hover:underline"
+                >
+                  За замовчуванням
+                </button>
+              )}
+            </div>
+            <input
+              type="url"
+              value={searchUrl}
+              onChange={(e) => setSearchUrl(e.target.value)}
+              placeholder={DEFAULT_AGENT_SEARCH_URL}
+              className="w-full p-2.5 text-xs font-mono border border-[#383632] bg-[#151412] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]"
+            />
+            <p className="text-[11px] text-[#7A7770]">
+              Формат запиту: <code className="text-[#A8A49C]">?q=запит&format=json</code>
+            </p>
+          </div>
+        </div>
+
+        {/* Accent Color Selector */}
+        <div>
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
+            Колір іконки агента
+          </label>
+          <div className="flex items-center gap-2">
+            {agentColors.map(hex => (
+              <button
+                key={hex}
+                type="button"
+                onClick={() => setColor(hex)}
+                style={{ backgroundColor: hex }}
+                className={`w-7 h-7 rounded-full transition-transform flex items-center justify-center ${
+                  color === hex ? 'ring-2 ring-white scale-110' : 'opacity-70 hover:opacity-100'
+                }`}
+              >
+                {color === hex && <Check size={14} className="text-white" />}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer Actions */}
+        <div className="flex gap-2.5 justify-end border-t border-[#33312D] pt-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2.5 text-sm font-medium text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#2F2E2B] rounded-xl transition-colors"
+          >
+            Скасувати
+          </button>
+          <button
+            type="submit"
+            disabled={isSubmitting || !name.trim() || !systemPrompt.trim() || !modelId.trim()}
+            className="px-5 py-2.5 text-sm font-semibold bg-[#CC785C] hover:bg-[#D97757] disabled:opacity-50 text-white rounded-xl shadow-md transition-colors flex items-center gap-1.5"
+          >
+            <Check size={16} />
+            <span>{isSubmitting ? 'Збереження...' : 'Зберегти агента'}</span>
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

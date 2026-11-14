@@ -18,6 +18,17 @@
         "priceInfo": { "type": "string", "required": true },
         "apiModelId": { "type": "string", "required": true }
       }
+    },
+    "Agent": {
+      "collection": "agents",
+      "fields": {
+        "name": { "type": "string", "required": true },
+        "description": { "type": "string", "required": false },
+        "systemPrompt": { "type": "string", "required": true },
+        "modelId": { "type": "string", "required": true },
+        "webSearchEnabled": { "type": "boolean", "required": true },
+        "searchUrl": { "type": "string", "required": true }
+      }
     }
   }
 }

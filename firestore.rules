@@ -28,5 +28,8 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read, write: if true;
     }
+    match /agents/{agentId} {
+      allow read, write: if true;
+    }
   }
 }

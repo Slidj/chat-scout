@@ -4,7 +4,7 @@ import legacy from '@vitejs/plugin-legacy';
 import path from 'path';
 import {defineConfig} from 'vite';
 
-import { resolveMediaUrl } from './server';
+import { resolveMediaUrl, proxyWebSearch } from './server';
 
 export default defineConfig(() => {
   return {
@@ -19,6 +19,27 @@ export default defineConfig(() => {
       {
         name: 'api-media-resolver',
         configureServer(server) {
+          server.middlewares.use('/api/web-search', async (req, res) => {
+            const urlObj = new URL(req.url || '', 'http://localhost:3000');
+            const targetUrl = urlObj.searchParams.get('url') || '';
+            if (!targetUrl) {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: false, error: 'Параметр url обов’язковий' }));
+              return;
+            }
+            try {
+              const result = await proxyWebSearch(targetUrl);
+              res.statusCode = result.ok ? 200 : (result.status || 502);
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(result.data ?? result));
+            } catch (err: any) {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: false, error: err.message }));
+            }
+          });
+
           server.middlewares.use('/api/resolve-media', async (req, res) => {
             const urlObj = new URL(req.url || '', 'http://localhost:3000');
             const targetUrl = urlObj.searchParams.get('url') || '';

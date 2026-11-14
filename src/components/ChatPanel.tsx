@@ -2,9 +2,10 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
-  Check, Square, History, Trash2, MessageSquare, Mail
+  Check, Square, History, Trash2, MessageSquare, Mail, Bot
 } from 'lucide-react';
 import { Message, streamChatResponse, generateChatResponse } from '../lib/api';
+import { Agent } from '../types';
 import { ChatMessage } from './ChatMessage';
 import { getTierClasses, getTierTextColor, resolveColorToHex } from '../lib/utils';
 import { 
@@ -35,6 +36,9 @@ interface ChatPanelProps {
   unreadCouponsCount?: number;
   onOpenCoupons?: () => void;
   activeChatId?: string | null;
+  activeAgent?: Agent | null;
+  agents?: Agent[];
+  onSelectAgent?: (agent: Agent | null) => void;
 }
 
 export function ChatPanel({ 
@@ -47,11 +51,15 @@ export function ChatPanel({
   currentUser,
   unreadCouponsCount = 0,
   onOpenCoupons,
-  activeChatId
+  activeChatId,
+  activeAgent = null,
+  agents = [],
+  onSelectAgent
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isAddSheetOpen, setIsAddSheetOpen] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -129,11 +137,13 @@ export function ChatPanel({
   }, [currentUid]);
 
   const lastHandledActiveChatIdRef = useRef<string | null | undefined>(undefined);
+  const lastHandledAgentIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
     if (!isOpen) return;
-    if (activeChatId === null && lastHandledActiveChatIdRef.current !== null) {
+    if (activeChatId === null && (lastHandledActiveChatIdRef.current !== null || lastHandledAgentIdRef.current !== (activeAgent?.id || null))) {
       lastHandledActiveChatIdRef.current = null;
+      lastHandledAgentIdRef.current = activeAgent?.id || null;
       handleNewChat();
     } else if (activeChatId && activeChatId !== lastHandledActiveChatIdRef.current) {
       const targetChat = savedChats.find(c => c.id === activeChatId);
@@ -142,7 +152,7 @@ export function ChatPanel({
         handleSelectChat(targetChat);
       }
     }
-  }, [activeChatId, savedChats, isOpen]);
+  }, [activeChatId, activeAgent?.id, savedChats, isOpen]);
 
   const persistChat = (msgs: Message[], customTitle?: string) => {
     if (msgs.length === 0) return;
@@ -155,6 +165,8 @@ export function ChatPanel({
       userId: currentUid,
       title,
       modelId: selectedModel || '',
+      agentId: activeAgent?.id,
+      agentName: activeAgent?.name,
       messages: msgs,
       createdAt: chatCreatedAtRef.current,
       updatedAt: Date.now(),
@@ -385,9 +397,11 @@ export function ChatPanel({
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const startTime = Date.now();
+    let latestSearchQueries: string[] = [];
+    setToolStatus(null);
 
     try {
-      // Real-time token streaming with smooth fluid animation
+      // Real-time token streaming with smooth fluid animation + Custom Agent System Prompt & Web Search Tool Calling
       await streamChatResponse(
         apiKey,
         selectedModel,
@@ -397,16 +411,30 @@ export function ChatPanel({
           streamTargetRef.current = accumulated;
           startFluidLoop(newModelId);
         },
-        abortController.signal
+        abortController.signal,
+        activeAgent
+          ? {
+              systemPrompt: activeAgent.systemPrompt,
+              webSearchEnabled: activeAgent.webSearchEnabled,
+              searchUrl: activeAgent.searchUrl,
+              onStatusChange: (status) => setToolStatus(status),
+              onSearchQueries: (queries) => {
+                latestSearchQueries = queries;
+                setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, searchQueries: queries } : m));
+              }
+            }
+          : undefined
       );
 
       isStreamingActiveRef.current = false;
+      setToolStatus(null);
 
       // Persist completed chat response to Firestore
       const finalAssistantMessage: Message = {
         id: newModelId,
         role: 'model',
         text: streamTargetRef.current,
+        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {})
       };
       const finalHistory = [...newHistory, finalAssistantMessage];
       persistChat(finalHistory, chatTitle);
@@ -415,13 +443,14 @@ export function ChatPanel({
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
-        modelId: selectedModel,
+        modelId: activeAgent ? `${activeAgent.name} (${selectedModel})` : selectedModel,
         promptSnippet: userText.slice(0, 100),
         durationMs,
         status: 'success'
       });
     } catch (error: any) {
       isStreamingActiveRef.current = false;
+      setToolStatus(null);
       if (error.name === 'AbortError') {
         // Generation cancelled by user, keep whatever text was generated
         return;
@@ -432,7 +461,7 @@ export function ChatPanel({
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
-        modelId: selectedModel,
+        modelId: activeAgent ? `${activeAgent.name} (${selectedModel})` : selectedModel,
         promptSnippet: userText.slice(0, 100),
         durationMs,
         status: 'error',
@@ -456,6 +485,7 @@ export function ChatPanel({
       persistChat([...newHistory, { id: newModelId, role: 'model', text: errorContent }], chatTitle);
     } finally {
       setIsLoading(false);
+      setToolStatus(null);
       abortControllerRef.current = null;
     }
   };
@@ -499,6 +529,8 @@ export function ChatPanel({
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
     const startTime = Date.now();
+    let latestSearchQueries: string[] = [];
+    setToolStatus(null);
 
     try {
       await streamChatResponse(
@@ -510,15 +542,29 @@ export function ChatPanel({
           streamTargetRef.current = accumulated;
           startFluidLoop(modelId);
         },
-        abortController.signal
+        abortController.signal,
+        activeAgent
+          ? {
+              systemPrompt: activeAgent.systemPrompt,
+              webSearchEnabled: activeAgent.webSearchEnabled,
+              searchUrl: activeAgent.searchUrl,
+              onStatusChange: (status) => setToolStatus(status),
+              onSearchQueries: (queries) => {
+                latestSearchQueries = queries;
+                setMessages(prev => prev.map(m => m.id === modelId ? { ...m, searchQueries: queries } : m));
+              }
+            }
+          : undefined
       );
 
       isStreamingActiveRef.current = false;
+      setToolStatus(null);
 
       const finalAssistantMessage: Message = {
         id: modelId,
         role: 'model',
         text: streamTargetRef.current,
+        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {})
       };
       persistChat([...historyWithoutLast, finalAssistantMessage]);
 
@@ -526,13 +572,14 @@ export function ChatPanel({
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
-        modelId: selectedModel,
+        modelId: activeAgent ? `${activeAgent.name} (${selectedModel})` : selectedModel,
         promptSnippet: lastUserMessage.text.slice(0, 100),
         durationMs,
         status: 'success'
       });
     } catch (error: any) {
       isStreamingActiveRef.current = false;
+      setToolStatus(null);
       if (error.name === 'AbortError') return;
       stopFluidLoop();
       const retryErrorText = `Помилка: ${error.message || 'Не вдалося повторити відповідь'}`;
@@ -550,6 +597,7 @@ export function ChatPanel({
       persistChat([...historyWithoutLast, { id: modelId, role: 'model', text: retryErrorText }]);
     } finally {
       setIsLoading(false);
+      setToolStatus(null);
       abortControllerRef.current = null;
     }
   };
@@ -561,6 +609,7 @@ export function ChatPanel({
     chatCreatedAtRef.current = Date.now();
     setCurrentTitle('Новий чат');
     setMessages([]);
+    setToolStatus(null);
     setIsHistoryOpen(false);
   };
 
@@ -569,9 +618,18 @@ export function ChatPanel({
     setCurrentChatId(chat.id);
     setMessages(chat.messages || []);
     setCurrentTitle(chat.title || 'Чат');
+    setToolStatus(null);
     chatCreatedAtRef.current = typeof chat.createdAt === 'number' 
       ? chat.createdAt 
       : (new Date(chat.createdAt).getTime() || Date.now());
+    if (onSelectAgent) {
+      if (chat.agentId) {
+        const matchedAgent = agents.find(a => a.id === chat.agentId) || null;
+        onSelectAgent(matchedAgent);
+      } else {
+        onSelectAgent(null);
+      }
+    }
     if (chat.modelId && chat.modelId !== selectedModel) {
       onChangeModel(chat.modelId);
     }
@@ -632,12 +690,32 @@ export function ChatPanel({
           </button>
           
           <div className="flex flex-col min-w-0">
-            <span className="font-medium text-sm text-[#EDE9DF] tracking-tight truncate max-w-[180px] sm:max-w-xs">
-              {currentTitle !== 'Новий чат' ? currentTitle : (activeModelObj?.name || 'Чат')}
-            </span>
-            {currentTitle !== 'Новий чат' && (
+            <div className="flex items-center gap-1.5 min-w-0">
+              {activeAgent && (
+                <span 
+                  className="inline-flex items-center justify-center w-5 h-5 rounded-md text-white shrink-0"
+                  style={{ backgroundColor: resolveColorToHex(activeAgent.color || '#CC785C') }}
+                >
+                  <Bot size={12} />
+                </span>
+              )}
+              <span className="font-medium text-sm text-[#EDE9DF] tracking-tight truncate max-w-[180px] sm:max-w-xs">
+                {activeAgent
+                  ? (currentTitle !== 'Новий чат' ? currentTitle : activeAgent.name)
+                  : (currentTitle !== 'Новий чат' ? currentTitle : (activeModelObj?.name || selectedModel || 'Чат'))}
+              </span>
+              {activeAgent?.webSearchEnabled && (
+                <span className="hidden xs:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/50 text-[10px] font-medium text-emerald-300 shrink-0">
+                  <Globe size={10} />
+                  <span>Web</span>
+                </span>
+              )}
+            </div>
+            {(activeAgent || currentTitle !== 'Новий чат') && (
               <span className="text-[11px] text-[#9E9A92] truncate">
-                {activeModelObj?.name || 'Чат'}
+                {activeAgent
+                  ? `${activeAgent.name} • ${selectedModel || activeAgent.modelId}`
+                  : (activeModelObj?.name || selectedModel || 'Чат')}
               </span>
             )}
           </div>
@@ -724,21 +802,63 @@ export function ChatPanel({
           </div>
         ) : messages.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center text-center px-4">
-            {activeModelObj?.providerLogoUrl ? (
-              <div 
-                style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
-                className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4 shadow-md overflow-hidden"
-              >
-                <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-2.5" />
+            {activeAgent ? (
+              <div className="max-w-md w-full flex flex-col items-center space-y-3">
+                <div 
+                  style={{ backgroundColor: resolveColorToHex(activeAgent.color || '#CC785C') }}
+                  className="w-16 h-16 rounded-3xl text-white flex items-center justify-center shadow-lg border border-white/10"
+                >
+                  <Bot size={30} />
+                </div>
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#292723] border border-[#3C3933] text-[10px] font-semibold uppercase tracking-wider text-[#CC785C] mb-1.5">
+                    <span>Кастомний Агент</span>
+                    {activeAgent.webSearchEnabled && (
+                      <>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-emerald-400">
+                          <Globe size={10} />
+                          Веб-пошук
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <h2 className="font-claude-serif text-2xl sm:text-3xl font-normal text-[#EDE9DF] tracking-tight">
+                    {activeAgent.name}
+                  </h2>
+                </div>
+                {activeAgent.description ? (
+                  <p className="text-xs sm:text-sm text-[#A5A096] leading-relaxed">
+                    {activeAgent.description}
+                  </p>
+                ) : (
+                  <p className="text-xs text-[#8E8B83] line-clamp-3 bg-[#21201D] border border-[#32302B] rounded-2xl px-4 py-2.5 italic">
+                    {activeAgent.systemPrompt}
+                  </p>
+                )}
+                <div className="text-[11px] font-mono text-[#7E7B74]">
+                  Модель: <span className="text-[#C8C3B8]">{selectedModel || activeAgent.modelId}</span>
+                </div>
               </div>
             ) : (
-              <div className="w-14 h-14 rounded-2xl bg-[#282723] text-[#CC785C] flex items-center justify-center mb-4 border border-[#3A3834]">
-                <Sparkles size={26} />
-              </div>
+              <>
+                {activeModelObj?.providerLogoUrl ? (
+                  <div 
+                    style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
+                    className="w-14 h-14 rounded-2xl flex items-center justify-center mb-4 shadow-md overflow-hidden"
+                  >
+                    <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-2.5" />
+                  </div>
+                ) : (
+                  <div className="w-14 h-14 rounded-2xl bg-[#282723] text-[#CC785C] flex items-center justify-center mb-4 border border-[#3A3834]">
+                    <Sparkles size={26} />
+                  </div>
+                )}
+                <h2 className="font-claude-serif text-3xl font-normal text-[#EDE9DF] tracking-tight">
+                  Чим можу допомогти?
+                </h2>
+              </>
             )}
-            <h2 className="font-claude-serif text-3xl font-normal text-[#EDE9DF] tracking-tight">
-              Чим можу допомогти?
-            </h2>
           </div>
         ) : (
           <div className="flex flex-col flex-1 pb-4">
@@ -748,6 +868,7 @@ export function ChatPanel({
                 message={m} 
                 isLast={index === messages.length - 1}
                 isTyping={typingMessageId === m.id}
+                toolStatus={typingMessageId === m.id ? toolStatus : null}
                 onSkipTyping={() => handleFastForward(m.id)}
                 onRetry={index === messages.length - 1 && m.role === 'model' ? handleRetry : undefined}
               />
@@ -796,7 +917,7 @@ export function ChatPanel({
               e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
             }}
             onKeyDown={handleKeyDown}
-            placeholder={`Reply to ${activeModelObj?.name || 'Claude'}...`}
+            placeholder={activeAgent ? `Напишіть агенту ${activeAgent.name}...` : `Reply to ${activeModelObj?.name || selectedModel || 'Claude'}...`}
             disabled={!apiKey || !selectedModel || isLoading}
             className="w-full bg-transparent px-2.5 pt-1 text-[16.5px] leading-[1.5] text-[#EDE9DF] placeholder-[#7E7B74] focus:outline-none resize-none"
             style={{ maxHeight: '120px' }}
@@ -832,7 +953,7 @@ export function ChatPanel({
                     </div>
                   ) : null}
                   <span className="truncate max-w-[130px]">
-                    {activeModelObj ? activeModelObj.name : 'Оберіть модель'}
+                    {activeModelObj ? activeModelObj.name : (selectedModel || 'Оберіть модель')}
                   </span>
                   <ChevronDown size={13} className="text-[#9E9A92] shrink-0" />
                 </button>

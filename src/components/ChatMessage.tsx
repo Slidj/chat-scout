@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle, Globe } from 'lucide-react';
 import { Message } from '../lib/api';
 import { MarkdownContent } from './MarkdownContent';
 
@@ -9,9 +9,10 @@ interface ChatMessageProps {
   isLast?: boolean;
   isTyping?: boolean;
   onSkipTyping?: () => void;
+  toolStatus?: string | null;
 }
 
-export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }: ChatMessageProps) {
+export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, toolStatus }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
@@ -113,10 +114,33 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping }
         className={`pr-2 pl-0.5 ${isTyping ? 'cursor-pointer' : ''}`}
         title={isTyping ? "Натисніть щоб показати текст одразу" : undefined}
       >
+        {message.searchQueries && message.searchQueries.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+            {message.searchQueries.map((q, idx) => (
+              <span
+                key={idx}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#24231F] border border-[#3B3831] text-[11px] font-medium text-[#C8C3B8]"
+              >
+                <Globe size={11} className="text-[#CC785C]" />
+                <span>Пошук: «{q}»</span>
+              </span>
+            ))}
+          </div>
+        )}
+
         {message.text === '' && isTyping ? (
           <div className="flex items-center gap-2.5 py-1 text-[#9E9A92] text-sm select-none animate-pulse">
-            <span className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
-            <span className="font-serif italic text-[#C5C2BA]">Міркує...</span>
+            {toolStatus ? (
+              <>
+                <Globe size={15} className="text-[#CC785C] animate-spin" />
+                <span className="font-medium text-[#DED8CD]">{toolStatus}</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
+                <span className="font-serif italic text-[#C5C2BA]">Міркує...</span>
+              </>
+            )}
           </div>
         ) : (
           <MarkdownContent content={message.text} isTyping={isTyping} />
