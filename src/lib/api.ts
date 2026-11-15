@@ -306,12 +306,21 @@ export async function executeWebSearch(
   // Format search JSON concisely for optimal LLM context consumption
   try {
     if (rawData && Array.isArray(rawData.results)) {
-      const compactResults = rawData.results.slice(0, 8).map((item: any) => ({
+      const mappedResults = rawData.results.slice(0, 10).map((item: any) => ({
         title: item.title || '',
         url: item.url || item.link || '',
         content: item.content || item.snippet || item.description || '',
         ...(item.publishedDate ? { publishedDate: item.publishedDate } : {})
       }));
+      const isLowPriorityUrl = (u: string) =>
+        /(youtube\.com|youtu\.be|instagram\.com|facebook\.com|tiktok\.com|twitter\.com|x\.com|\/video\/|\/reel\/)/i.test(u);
+      const sortedResults = includeReaderHint
+        ? [
+            ...mappedResults.filter((r: any) => r.url && !isLowPriorityUrl(r.url)),
+            ...mappedResults.filter((r: any) => !r.url || isLowPriorityUrl(r.url))
+          ]
+        : mappedResults;
+      const compactResults = sortedResults.slice(0, 8);
       return JSON.stringify({
         query,
         currentDateTime: kyivDateTime,
@@ -321,7 +330,7 @@ export async function executeWebSearch(
         ...(nbuData ? { officialNbuRates: nbuData } : {}),
         ...(includeReaderHint && compactResults.length > 0
           ? {
-              note: 'Поля content містять лише короткі фрагменти. Щоб прочитати повний текст новини чи статті або деталі — виклич read_webpage(url) для найкращого посилання з results (надавай перевагу новинним/статейним сайтам, а не соцмережам чи YouTube).'
+              note: 'Поля content містять лише короткі фрагменти. Щоб прочитати повний текст новини чи статті — виклич read_webpage(url) для текстової статті з results (оминай соцмережі, YouTube та /video/ сторінки; якщо сайт поверне помилку 403/404 — спробуй інше посилання або зроби точніший пошук без зайвих років).'
             }
           : {}),
         results: compactResults
@@ -515,6 +524,19 @@ export async function executeReadWebpage(
       return 'Помилка: не вдалося завантажити вміст сторінки (сервіс повернув порожню відповідь).';
     }
 
+    const targetErrorMatch = rawText.match(/Warning:\s*Target URL returned error\s+(\d{3})[^\n]*/i);
+    if (targetErrorMatch) {
+      return `Помилка: не вдалося прочитати сторінку ${normalizedUrl} (сайт повернув ${targetErrorMatch[1]} або обмежив доступ). Спробуй інше посилання з результатів пошуку або знайди іншу статтю.`;
+    }
+
+    const headSample = rawText.slice(0, 600);
+    if (
+      rawText.length < 1800 &&
+      /(Title:\s*(Access Denied|404|Page Not Found)|#\s*Access Denied|The page you are looking for can['’]?t be found|404\s+Not\s+Found)/i.test(headSample)
+    ) {
+      return `Помилка: сторінка ${normalizedUrl} недоступна (403 Access Denied або 404 Not Found). Спробуй відкрити інше посилання з результатів пошуку.`;
+    }
+
     const header = `Джерело: ${normalizedUrl}\n\n`;
     const remainingLimit = Math.max(2000, MAX_WEBPAGE_CHARS - header.length);
     if (rawText.length > remainingLimit) {
@@ -553,9 +575,9 @@ function buildInitialApiMessages(
       contextBlock +=
         `\nУ тебе активні два інструменти: \`web_search\` (пошук посилань і коротких сніпетів) та \`read_webpage\` (читання повного тексту сторінки за URL).` +
         `\n- Якщо користувач запитує сьогоднішню дату або час — відповідай за вказаною вище датою (${kyivDateTime}).` +
-        `\n- Для пошуку фактів, новин, курсів валют чи подій викликай \`web_search\` (за потреби додавай ${year} рік).` +
-        `\n- ВАЖЛИВО: \`web_search\` повертає лише короткі уривки (1–2 речення). Якщо користувач просить прочитати новину/статтю/розділ, переказати деталі ("що там говорять") або надає посилання — НЕ роби повторний \`web_search\` зі словами "details/full text", а ОБОВ’ЯЗКОВО виклич \`read_webpage(url)\` для релевантної статті з \`results\` (обирай сайти новин/блоги/документацію, а не YouTube/Instagram).` +
-        `\n- Якщо \`read_webpage\` повернув помилку, чесно скажи про це користувачу й не вигадуй вміст сторінки.`;
+        `\n- Для пошуку фактів, новин, курсів валют чи подій викликай \`web_search\` (формулюй чіткий запит без переліку кількох років на кшталт "2024 2025 2026" — за потреби вказуй лише ${year}).` +
+        `\n- ВАЖЛИВО: \`web_search\` повертає лише короткі уривки (1–2 речення). Якщо користувач просить прочитати новину/статтю/розділ або переказати деталі — НЕ роби повторний \`web_search\` зі словами "details", а виклич \`read_webpage(url)\` для текстової статті з \`results\` (оминай YouTube, Instagram, Facebook та посилання з \`/video/\`).` +
+        `\n- Якщо \`read_webpage\` повернув помилку 403/404, спробуй інше посилання з \`results\` або уточни запит у \`web_search\`, щоб знайти відкриту статтю; якщо жодну сторінку прочитати не вдалося, чесно скажи про це і не вигадуй текст.`;
     } else if (options?.webSearchEnabled) {
       contextBlock +=
         `\nУ тебе активний інструмент веб-пошуку \`web_search\`.` +
@@ -906,12 +928,12 @@ export async function streamChatResponse(
                 const targetUrl = parseToolUrl(tc.function.arguments);
                 options?.onStatusChange?.(`Читаю сторінку: ${targetUrl || '...'}`);
 
-                if (targetUrl && !executedReadUrls.includes(targetUrl)) {
+                const pageContent = await executeReadWebpage(targetUrl, signal);
+
+                if (targetUrl && !pageContent.startsWith('Помилка:') && !executedReadUrls.includes(targetUrl)) {
                   executedReadUrls.push(targetUrl);
                   options?.onReadUrls?.([...executedReadUrls]);
                 }
-
-                const pageContent = await executeReadWebpage(targetUrl, signal);
 
                 roundMessages.push({
                   role: 'tool',
@@ -1040,12 +1062,12 @@ export async function generateChatResponse(
           const targetUrl = parseToolUrl(tc.function.arguments || '{}');
           options?.onStatusChange?.(`Читаю сторінку: ${targetUrl || '...'}`);
 
-          if (targetUrl && !executedReadUrls.includes(targetUrl)) {
+          const pageContent = await executeReadWebpage(targetUrl);
+
+          if (targetUrl && !pageContent.startsWith('Помилка:') && !executedReadUrls.includes(targetUrl)) {
             executedReadUrls.push(targetUrl);
             options?.onReadUrls?.([...executedReadUrls]);
           }
-
-          const pageContent = await executeReadWebpage(targetUrl);
 
           workingMessages.push({
             role: 'tool',

@@ -720,25 +720,11 @@ export function ChatPanel({
               </span>
             </div>
             {(activeAgent || currentTitle !== 'Новий чат') && (
-              <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                <span className="text-[11px] text-[#9E9A92] truncate max-w-[190px] sm:max-w-xs">
-                  {activeAgent
-                    ? `${activeAgent.name} • ${selectedModel || activeAgent.modelId}`
-                    : (activeModelObj?.name || selectedModel || 'Чат')}
-                </span>
-                {activeAgent?.webSearchEnabled && (
-                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-emerald-950/60 border border-emerald-800/50 text-[9.5px] font-medium text-emerald-300 shrink-0">
-                    <Globe size={9} />
-                    <span>Web</span>
-                  </span>
-                )}
-                {activeAgent?.webReaderEnabled && (
-                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded-full bg-sky-950/60 border border-sky-800/50 text-[9.5px] font-medium text-sky-300 shrink-0">
-                    <FileText size={9} />
-                    <span>Reader</span>
-                  </span>
-                )}
-              </div>
+              <span className="text-[11px] text-[#9E9A92] truncate max-w-[210px] sm:max-w-xs">
+                {activeAgent
+                  ? `${activeAgent.name} • ${selectedModel || activeAgent.modelId}`
+                  : (activeModelObj?.name || selectedModel || 'Чат')}
+              </span>
             )}
           </div>
         </div>
