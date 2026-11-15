@@ -1070,7 +1070,7 @@ export default function App() {
         unreadCouponsCount={unreadCouponsCount}
         onOpenCoupons={() => setIsCouponModalOpen(true)}
         activeChatId={activeChatId}
-        activeAgent={activeAgent}
+        activeAgent={activeAgent ? (agents.find(a => a.id === activeAgent.id) || activeAgent) : null}
         agents={agents}
         onSelectAgent={setActiveAgent}
       />

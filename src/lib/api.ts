@@ -49,13 +49,13 @@ export const READ_WEBPAGE_TOOL = {
   type: 'function' as const,
   function: {
     name: 'read_webpage',
-    description: 'Читає та повертає повний текстовий вміст веб-сторінки за вказаним URL-посиланням. Використовуй, коли потрібно детально вивчити статтю, документацію чи обговорення на форумі.',
+    description: 'Читає та повертає повний текстовий вміст веб-сторінки за вказаним URL-посиланням. Обов’язково використовуй цей інструмент, коли користувач просить прочитати новину/статтю, переказати деталі чи розділ із сайту або дає URL (після web_search відкривай найкраще посилання з results через read_webpage).',
     parameters: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'Повна адреса веб-сторінки, наприклад https://example.com/article'
+          description: 'Повна адреса веб-сторінки (наприклад, https://example.com/article)'
         }
       },
       required: ['url']
@@ -278,7 +278,8 @@ async function fetchTargetSearchJson(targetUrl: string, externalSignal?: AbortSi
 export async function executeWebSearch(
   searchUrl: string,
   query: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  includeReaderHint?: boolean
 ): Promise<string> {
   const cleanBase = (searchUrl || DEFAULT_SEARCH_URL).trim();
   const separator = cleanBase.includes('?') ? '&' : '?';
@@ -318,6 +319,11 @@ export async function executeWebSearch(
         ...(Array.isArray(rawData.answers) && rawData.answers.length > 0 ? { answers: rawData.answers.slice(0, 3) } : {}),
         ...(Array.isArray(rawData.infoboxes) && rawData.infoboxes.length > 0 ? { infoboxes: rawData.infoboxes.slice(0, 2) } : {}),
         ...(nbuData ? { officialNbuRates: nbuData } : {}),
+        ...(includeReaderHint && compactResults.length > 0
+          ? {
+              note: 'Поля content містять лише короткі фрагменти. Щоб прочитати повний текст новини чи статті або деталі — виклич read_webpage(url) для найкращого посилання з results (надавай перевагу новинним/статейним сайтам, а не соцмережам чи YouTube).'
+            }
+          : {}),
         results: compactResults
       });
     }
@@ -543,17 +549,23 @@ function buildInitialApiMessages(
   if (options?.webSearchEnabled || options?.webReaderEnabled || (options?.systemPrompt && options.systemPrompt.trim())) {
     const { kyivDateTime, isoDate, year } = getCurrentDateTimeContext();
     let contextBlock = `[Системний контекст актуальності]\nПоточна дата та час (Київ): ${kyivDateTime} (ISO: ${isoDate}).`;
-    if (options?.webSearchEnabled) {
+    if (options?.webSearchEnabled && options?.webReaderEnabled) {
+      contextBlock +=
+        `\nУ тебе активні два інструменти: \`web_search\` (пошук посилань і коротких сніпетів) та \`read_webpage\` (читання повного тексту сторінки за URL).` +
+        `\n- Якщо користувач запитує сьогоднішню дату або час — відповідай за вказаною вище датою (${kyivDateTime}).` +
+        `\n- Для пошуку фактів, новин, курсів валют чи подій викликай \`web_search\` (за потреби додавай ${year} рік).` +
+        `\n- ВАЖЛИВО: \`web_search\` повертає лише короткі уривки (1–2 речення). Якщо користувач просить прочитати новину/статтю/розділ, переказати деталі ("що там говорять") або надає посилання — НЕ роби повторний \`web_search\` зі словами "details/full text", а ОБОВ’ЯЗКОВО виклич \`read_webpage(url)\` для релевантної статті з \`results\` (обирай сайти новин/блоги/документацію, а не YouTube/Instagram).` +
+        `\n- Якщо \`read_webpage\` повернув помилку, чесно скажи про це користувачу й не вигадуй вміст сторінки.`;
+    } else if (options?.webSearchEnabled) {
       contextBlock +=
         `\nУ тебе активний інструмент веб-пошуку \`web_search\`.` +
         `\n- Якщо користувач запитує сьогоднішню дату, день тижня або поточний час — відповідай точно за вказаною вище датою (${kyivDateTime}).` +
         `\n- Для актуальних фактів, новин, курсів валют, погоди чи подій викликай \`web_search\` (за потреби додавай у пошуковий запит ${year} рік).` +
         `\n- Отримавши відповідь \`web_search\`, спирайся на її реальні дані (\`results\`, \`answers\`, \`officialNbuRates\`, \`currentDateTime\`) і наводь конкретні цифри та факти.`;
-    }
-    if (options?.webReaderEnabled) {
+    } else if (options?.webReaderEnabled) {
       contextBlock +=
         `\nУ тебе активний інструмент читання веб-сторінок \`read_webpage\`.` +
-        `\n- Викликай \`read_webpage(url)\`, коли користувач надає посилання або коли після \`web_search\` потрібно детально вивчити повний текст статті, документації чи обговорення.` +
+        `\n- Викликай \`read_webpage(url)\`, коли користувач надає посилання або просить прочитати чи переказати вміст веб-сторінки.` +
         `\n- Якщо \`read_webpage\` повернув повідомлення про помилку, чесно повідом користувача, що сторінку не вдалося прочитати, і не вигадуй її вміст.`;
     }
     systemParts.push(contextBlock);
@@ -609,8 +621,11 @@ function mergeStreamToolCalls(toolCallsMap: Map<number, OpenAIToolCall>, deltaTo
         existing.function.name += tc.function.name;
       }
     }
-    if (tc.function?.arguments) {
-      existing.function.arguments += tc.function.arguments;
+    if (tc.function?.arguments !== undefined) {
+      const argChunk = typeof tc.function.arguments === 'string'
+        ? tc.function.arguments
+        : JSON.stringify(tc.function.arguments);
+      existing.function.arguments += argChunk;
     }
     toolCallsMap.set(targetIdx, existing);
   }
@@ -808,12 +823,13 @@ export async function streamChatResponse(
             // 3. Collect full message.tool_calls if non-delta SSE chunk
             if (Array.isArray(messageObj?.tool_calls)) {
               messageObj.tool_calls.forEach((tc: any, idx: number) => {
+                const rawArgs = tc.function?.arguments;
                 toolCallsMap.set(idx, {
                   id: tc.id || `call_${Date.now()}_${idx}`,
                   type: 'function',
                   function: {
                     name: tc.function?.name || 'web_search',
-                    arguments: tc.function?.arguments || '{}'
+                    arguments: typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs || {})
                   }
                 });
               });
@@ -876,7 +892,8 @@ export async function streamChatResponse(
                 const searchResultJson = await executeWebSearch(
                   options?.searchUrl || DEFAULT_SEARCH_URL,
                   searchQuery,
-                  signal
+                  signal,
+                  !!options?.webReaderEnabled
                 );
 
                 roundMessages.push({
@@ -1008,7 +1025,9 @@ export async function generateChatResponse(
 
           const searchResultJson = await executeWebSearch(
             options?.searchUrl || DEFAULT_SEARCH_URL,
-            searchQuery
+            searchQuery,
+            undefined,
+            !!options?.webReaderEnabled
           );
 
           workingMessages.push({
