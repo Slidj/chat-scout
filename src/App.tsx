@@ -684,7 +684,7 @@ export default function App() {
                       onClick={() => openModelDetails(model)}
                       className={`rounded-2xl cursor-pointer transition-all flex overflow-hidden relative border ${getTierClasses(model.tier)}`}
                     >
-                      {model.tier && model.tier !== 'common' && (
+                      {!isChatOpen && model.tier && model.tier !== 'common' && (
                         <div className="stars-container opacity-40"></div>
                       )}
                       
@@ -755,7 +755,7 @@ export default function App() {
                   onClick={() => openModelDetails(model)}
                   className={`rounded-2xl cursor-pointer transition-all flex overflow-hidden relative border ${getTierClasses(model.tier)}`}
                 >
-                  {model.tier && model.tier !== 'common' && (
+                  {!isChatOpen && model.tier && model.tier !== 'common' && (
                     <div className="stars-container opacity-40"></div>
                   )}
                   <div className="p-3.5 flex-1 relative z-10">
@@ -847,8 +847,8 @@ export default function App() {
       >
         {/* Dark Backdrop */}
         <div 
-          className={`fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ease-out ${
-            isDrawerOpen ? 'opacity-100' : 'opacity-0'
+          className={`fixed inset-0 bg-black/60 transition-opacity duration-300 ease-out ${
+            isDrawerOpen ? 'opacity-100 backdrop-blur-xs' : 'opacity-0'
           }`}
           onClick={() => setIsDrawerOpen(false)}
         />

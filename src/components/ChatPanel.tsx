@@ -109,6 +109,7 @@ export function ChatPanel({
   const streamTargetRef = useRef<string>('');
   const streamDisplayedRef = useRef<string>('');
   const streamFrameIdRef = useRef<number | null>(null);
+  const lastStreamPaintRef = useRef<number>(0);
   const isStreamingActiveRef = useRef<boolean>(false);
 
   // Toggles for "Add to chat" sheet
@@ -223,10 +224,10 @@ export function ChatPanel({
   };
 
   useEffect(() => {
-    if (isOpen && !isAutoScrollPausedRef.current) {
-      scrollToBottom();
+    if (isOpen && !isAutoScrollPausedRef.current && !typingMessageId) {
+      scrollToBottom(false);
     }
-  }, [messages, isOpen]);
+  }, [messages.length, isOpen]);
 
   // Clean up any running stream and animation frame on unmount
   useEffect(() => {
@@ -254,28 +255,31 @@ export function ChatPanel({
   const startFluidLoop = (targetMessageId: string) => {
     if (streamFrameIdRef.current) return;
 
-    const tick = () => {
+    const tick = (now: number) => {
+      // Pace DOM updates at ~20 FPS (~48ms) to keep Android WebView compositor & layout memory light
+      if (now - lastStreamPaintRef.current < 48) {
+        streamFrameIdRef.current = requestAnimationFrame(tick);
+        return;
+      }
+      lastStreamPaintRef.current = now;
+
       const target = streamTargetRef.current;
       const current = streamDisplayedRef.current;
 
       if (current.length < target.length) {
         const diff = target.length - current.length;
 
-        // Dynamic fluid pacing:
-        // When diff is small (1-10 chars): 1-2 chars per frame (~60-120 chars/sec) - smooth liquid stream
-        // When diff is large (e.g. 50-200 chars burst from network buffer):
-        // smoothly accelerates so it never falls behind, but avoids single-frame jarring dumps
-        let step = 1;
-        if (diff > 160) {
-          step = Math.min(Math.ceil(diff / 6), 14);
-        } else if (diff > 80) {
-          step = Math.min(Math.ceil(diff / 8), 10);
-        } else if (diff > 30) {
-          step = Math.min(Math.ceil(diff / 10), 5);
-        } else if (diff > 8) {
-          step = 2;
+        let step = 3;
+        if (diff > 240) {
+          step = Math.min(Math.ceil(diff / 4), 48);
+        } else if (diff > 100) {
+          step = Math.min(Math.ceil(diff / 5), 24);
+        } else if (diff > 35) {
+          step = Math.min(Math.ceil(diff / 6), 12);
+        } else if (diff > 10) {
+          step = 5;
         } else {
-          step = 1;
+          step = Math.min(diff, 4);
         }
 
         const nextLen = Math.min(current.length + step, target.length);
@@ -286,11 +290,11 @@ export function ChatPanel({
           prev.map(m => m.id === targetMessageId ? { ...m, text: nextText } : m)
         );
 
-        // Smooth scroll follow ONLY if user has not paused auto-scroll
+        // Direct scrollTop update (zero smooth-scroll animation queue buildup)
         if (!isAutoScrollPausedRef.current && mainScrollRef.current) {
           const { scrollTop, scrollHeight, clientHeight } = mainScrollRef.current;
           const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-          if (distanceToBottom < 120) {
+          if (distanceToBottom < 140) {
             mainScrollRef.current.scrollTop = scrollHeight;
           }
         }
@@ -389,6 +393,7 @@ export function ChatPanel({
     // Reset fluid stream buffers & auto-scroll state
     streamTargetRef.current = '';
     streamDisplayedRef.current = '';
+    lastStreamPaintRef.current = 0;
     isStreamingActiveRef.current = true;
     isAutoScrollPausedRef.current = false;
     setIsAutoScrollPaused(false);
@@ -528,6 +533,7 @@ export function ChatPanel({
     // Reset fluid stream buffers & auto-scroll state
     streamTargetRef.current = '';
     streamDisplayedRef.current = '';
+    lastStreamPaintRef.current = 0;
     isStreamingActiveRef.current = true;
     isAutoScrollPausedRef.current = false;
     setIsAutoScrollPaused(false);
@@ -1237,8 +1243,8 @@ export function ChatPanel({
       >
         {/* Backdrop */}
         <div 
-          className={`fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity duration-300 ease-out ${
-            isHistoryOpen ? 'opacity-100' : 'opacity-0'
+          className={`fixed inset-0 bg-black/60 transition-opacity duration-300 ease-out ${
+            isHistoryOpen ? 'opacity-100 backdrop-blur-xs' : 'opacity-0'
           }`}
           onClick={() => setIsHistoryOpen(false)}
         />

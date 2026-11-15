@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle, Globe, FileText } from 'lucide-react';
 import { Message } from '../lib/api';
 import { MarkdownContent } from './MarkdownContent';
@@ -12,7 +12,7 @@ interface ChatMessageProps {
   toolStatus?: string | null;
 }
 
-export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, toolStatus }: ChatMessageProps) {
+export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, toolStatus }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
@@ -108,7 +108,10 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, 
 
   // Claude-style Assistant response: directly on canvas, with proper markdown typography
   return (
-    <div className="flex flex-col w-full mb-8 animate-in fade-in duration-200">
+    <div
+      className="flex flex-col w-full mb-8 animate-in fade-in duration-200"
+      style={{ contain: 'layout style' }}
+    >
       <div 
         onClick={isTyping ? onSkipTyping : undefined}
         className={`pr-2 pl-0.5 ${isTyping ? 'cursor-pointer' : ''}`}
@@ -245,4 +248,14 @@ export function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, 
       )}
     </div>
   );
-}
+}, (prev, next) => (
+  prev.message.id === next.message.id &&
+  prev.message.role === next.message.role &&
+  prev.message.text === next.message.text &&
+  prev.message.searchQueries === next.message.searchQueries &&
+  prev.message.readUrls === next.message.readUrls &&
+  prev.isLast === next.isLast &&
+  prev.isTyping === next.isTyping &&
+  prev.toolStatus === next.toolStatus &&
+  Boolean(prev.onRetry) === Boolean(next.onRetry)
+));
