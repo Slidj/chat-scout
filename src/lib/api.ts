@@ -307,9 +307,9 @@ export async function executeWebSearch(
   try {
     if (rawData && Array.isArray(rawData.results)) {
       const mappedResults = rawData.results.slice(0, 10).map((item: any) => ({
-        title: item.title || '',
+        title: String(item.title || '').slice(0, 160),
         url: item.url || item.link || '',
-        content: item.content || item.snippet || item.description || '',
+        content: String(item.content || item.snippet || item.description || '').slice(0, 360),
         ...(item.publishedDate ? { publishedDate: item.publishedDate } : {})
       }));
       const isLowPriorityUrl = (u: string) =>
@@ -320,7 +320,7 @@ export async function executeWebSearch(
             ...mappedResults.filter((r: any) => !r.url || isLowPriorityUrl(r.url))
           ]
         : mappedResults;
-      const compactResults = sortedResults.slice(0, 8);
+      const compactResults = sortedResults.slice(0, 6);
       return JSON.stringify({
         query,
         currentDateTime: kyivDateTime,
@@ -473,7 +473,7 @@ export function sanitizeConversationHistory(history: Message[], currentPrompt: s
   return trimmed;
 }
 
-const MAX_WEBPAGE_CHARS = 14000;
+const MAX_WEBPAGE_CHARS = 9500;
 
 function normalizeTargetUrl(rawUrl: string): string | null {
   const trimmed = (rawUrl || '').trim().replace(/^["'<]+|["'>]+$/g, '');
@@ -689,24 +689,51 @@ function getEnabledTools(options?: ChatRequestOptions): any[] {
   return tools;
 }
 
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason || new DOMException('Запит скасовано', 'AbortError'));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason || new DOMException('Запит скасовано', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+function isRateLimitError(rawError: any, statusCode?: number): boolean {
+  if (statusCode === 429) return true;
+  const str = typeof rawError === 'string' ? rawError : JSON.stringify(rawError || '');
+  return /(rate-?limit|429|too many requests|resource_exhausted|quota)/i.test(str);
+}
+
 /**
  * Transforms cryptic JSON/upstream rate-limit errors into clear Ukrainian messages
  */
-export function formatApiError(rawError: any): string {
-  if (!rawError) return 'Невідома помилка підключення до моделі';
+export function formatApiError(rawError: any, statusCode?: number): string {
+  if (!rawError && !statusCode) return 'Невідома помилка підключення до моделі';
   
-  const str = typeof rawError === 'string' ? rawError : JSON.stringify(rawError);
+  const str = typeof rawError === 'string' ? rawError : JSON.stringify(rawError || '');
 
-  if (str.includes('rate-limited') || str.includes('429')) {
+  if (isRateLimitError(str, statusCode)) {
     return 'Модель тимчасово перевантажена запитами (ліміт запитів). Зачекайте 10–20 секунд і спробуйте знову, або перемкніться на іншу доступну модель.';
   }
-  if (str.includes('Internal error encountered') || str.includes('INTERNAL') || str.includes('"code": 500')) {
+  if (statusCode && statusCode >= 500 || str.includes('Internal error encountered') || str.includes('INTERNAL') || str.includes('"code": 500')) {
     return 'Сервер моделі тимчасово повернув помилку (500). Спробуйте повторити запит або обрати іншу модель зі списку.';
   }
-  if (str.includes('401') || str.includes('Invalid token')) {
+  if (statusCode === 401 || str.includes('401') || str.includes('Invalid token')) {
     return 'Невірний API ключ або токен доступу. Перевірте налаштування ключа.';
   }
-  if (str.includes('402')) {
+  if (statusCode === 402 || str.includes('402')) {
     return 'Недостатньо коштів на балансі API ключа.';
   }
 
@@ -719,7 +746,8 @@ export function formatApiError(rawError: any): string {
 
 /**
  * Streams chat completion in real-time (stream: true) via SSE
- * Supports custom System Prompts and OpenAI-compatible Function/Tool Calling (web_search).
+ * Supports custom System Prompts and OpenAI-compatible Function/Tool Calling (web_search, read_webpage).
+ * Uses per-round retry with backoff so collected tool results are preserved across transient 429/5xx errors.
  */
 export async function streamChatResponse(
   apiKey: string,
@@ -730,41 +758,45 @@ export async function streamChatResponse(
   signal?: AbortSignal,
   options?: ChatRequestOptions
 ): Promise<string> {
-  const workingMessages: any[] = buildInitialApiMessages(history, prompt, options);
+  const roundMessages: any[] = buildInitialApiMessages(history, prompt, options);
   const executedQueries: string[] = [];
   const executedReadUrls: string[] = [];
   const activeTools = getEnabledTools(options);
 
   const MAX_TOOL_ROUNDS = 5;
-  const MAX_RETRIES = 2;
+  const MAX_ROUND_RETRIES = 2;
+  const baseUrl = BASE_URLS[0];
+  let totalAccumulatedText = '';
+  let lastApiCallAt = 0;
   let lastError: any = null;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      if (signal?.aborted) throw new Error("Запит скасовано");
-      const delayMs = attempt * 1250;
-      await new Promise(r => setTimeout(r, delayMs));
-    }
+  try {
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const enableToolsThisRound = activeTools.length > 0 && round < MAX_TOOL_ROUNDS;
 
-    for (const baseUrl of BASE_URLS) {
-      try {
-        const roundMessages = [...workingMessages];
-        let totalAccumulatedText = '';
+      const requestBody: Record<string, any> = {
+        model: modelId,
+        messages: roundMessages,
+        stream: true
+      };
 
-        for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-          const enableToolsThisRound = activeTools.length > 0 && round < MAX_TOOL_ROUNDS;
+      if (enableToolsThisRound) {
+        requestBody.tools = activeTools;
+        requestBody.tool_choice = 'auto';
+      }
 
-          const requestBody: Record<string, any> = {
-            model: modelId,
-            messages: roundMessages,
-            stream: true
-          };
+      let roundText = '';
+      const toolCallsMap = new Map<number, OpenAIToolCall>();
 
-          if (enableToolsThisRound) {
-            requestBody.tools = activeTools;
-            requestBody.tool_choice = 'auto';
-          }
+      for (let roundAttempt = 0; roundAttempt <= MAX_ROUND_RETRIES; roundAttempt++) {
+        // Gentle spacing between consecutive tool-calling rounds to respect strict per-second RPM limits
+        const elapsedSinceLastCall = Date.now() - lastApiCallAt;
+        if (lastApiCallAt > 0 && elapsedSinceLastCall < 900) {
+          await sleepWithAbort(900 - elapsedSinceLastCall, signal);
+        }
 
+        try {
+          lastApiCallAt = Date.now();
           const response = await fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
             headers: {
@@ -779,10 +811,14 @@ export async function streamChatResponse(
           });
 
           if (response.status === 401) {
-            throw new Error("Невірний API ключ (помилка 401). Перевірте налаштування.");
+            const authErr: any = new Error("Невірний API ключ (помилка 401). Перевірте налаштування.");
+            authErr.statusCode = 401;
+            throw authErr;
           }
           if (response.status === 402) {
-            throw new Error("Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.");
+            const payErr: any = new Error("Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.");
+            payErr.statusCode = 402;
+            throw payErr;
           }
           if (!response.ok) {
             let errData: any = null;
@@ -791,9 +827,14 @@ export async function streamChatResponse(
             } catch {
               errData = await response.text();
             }
-            const formattedMsg = formatApiError(errData);
-            const err = new Error(formattedMsg);
-            (err as any).statusCode = response.status;
+            const formattedMsg = formatApiError(errData, response.status);
+            const err: any = new Error(formattedMsg);
+            err.statusCode = response.status;
+            err.isRateLimit = isRateLimitError(errData, response.status);
+            const retryAfterSec = Number(response.headers.get('retry-after'));
+            if (Number.isFinite(retryAfterSec) && retryAfterSec > 0 && retryAfterSec <= 15) {
+              err.retryAfterMs = retryAfterSec * 1000;
+            }
             throw err;
           }
 
@@ -804,13 +845,16 @@ export async function streamChatResponse(
           const reader = response.body.getReader();
           const decoder = new TextDecoder('utf-8');
           let buffer = '';
-          let roundText = '';
-          const toolCallsMap = new Map<number, OpenAIToolCall>();
+          roundText = '';
+          toolCallsMap.clear();
 
           const processSsePayload = (jsonStr: string) => {
             const parsed = JSON.parse(jsonStr);
             if (parsed.error) {
-              throw new Error(formatApiError(parsed.error));
+              const formatted = formatApiError(parsed.error);
+              const sseErr: any = new Error(formatted);
+              sseErr.isRateLimit = isRateLimitError(parsed.error);
+              throw sseErr;
             }
             const choice = parsed.choices?.[0];
             if (!choice) return;
@@ -888,104 +932,143 @@ export async function streamChatResponse(
             } catch {}
           }
 
-          // Check if the model requested any tool_calls in this round
-          const toolCallsList = Array.from(toolCallsMap.entries())
-            .sort(([a], [b]) => a - b)
-            .map(([, tc]) => tc)
-            .filter(tc => !!tc.function.name);
+          // Round succeeded — break retry loop
+          break;
+        } catch (err: any) {
+          if (err?.name === 'AbortError' || signal?.aborted) {
+            throw err;
+          }
+          lastError = err;
 
-          if (toolCallsList.length > 0 && round < MAX_TOOL_ROUNDS) {
-            roundMessages.push({
-              role: 'assistant',
-              content: roundText || null,
-              tool_calls: toolCallsList
-            });
+          if (err?.statusCode === 401 || err?.statusCode === 402 || err?.message?.includes('401') || err?.message?.includes('402')) {
+            throw err;
+          }
 
-            for (const tc of toolCallsList) {
-              if (tc.function.name === 'web_search') {
-                const searchQuery = parseToolQuery(tc.function.arguments);
-                options?.onStatusChange?.(`Шукаю в мережі: «${searchQuery || '...'}»`);
+          const canRetryRound = roundAttempt < MAX_ROUND_RETRIES && roundText.length === 0;
+          if (!canRetryRound) {
+            throw err;
+          }
 
-                if (searchQuery && !executedQueries.includes(searchQuery)) {
-                  executedQueries.push(searchQuery);
-                  options?.onSearchQueries?.([...executedQueries]);
-                }
+          const isRateErr = Boolean(err?.isRateLimit || isRateLimitError(err?.message, err?.statusCode));
+          const backoffMs = isRateErr
+            ? Math.max(err?.retryAfterMs || 0, (roundAttempt + 1) * 3500)
+            : (roundAttempt + 1) * 1500;
 
-                const searchResultJson = await executeWebSearch(
-                  options?.searchUrl || DEFAULT_SEARCH_URL,
-                  searchQuery,
-                  signal,
-                  !!options?.webReaderEnabled
-                );
+          options?.onStatusChange?.(
+            isRateErr
+              ? 'Модель тимчасово зайнята, очікую кілька секунд і повторюю...'
+              : 'Тимчасова помилка зʼєднання, повторюю запит...'
+          );
+          console.warn(`Раунд ${round} спроба ${roundAttempt + 1} не вдалася (${err?.message}). Повтор через ${backoffMs}мс`);
+          await sleepWithAbort(backoffMs, signal);
+          options?.onStatusChange?.(round > 0 ? 'Аналізую отримані дані...' : null);
+        }
+      }
 
-                roundMessages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  name: tc.function.name,
-                  content: searchResultJson
-                });
-              } else if (tc.function.name === 'read_webpage') {
-                const targetUrl = parseToolUrl(tc.function.arguments);
-                options?.onStatusChange?.(`Читаю сторінку: ${targetUrl || '...'}`);
+      // Check if the model requested any tool_calls in this round
+      const toolCallsList = Array.from(toolCallsMap.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, tc]) => tc)
+        .filter(tc => !!tc.function.name);
 
-                const pageContent = await executeReadWebpage(targetUrl, signal);
+      if (toolCallsList.length > 0 && round < MAX_TOOL_ROUNDS) {
+        roundMessages.push({
+          role: 'assistant',
+          content: roundText || null,
+          tool_calls: toolCallsList
+        });
 
-                if (targetUrl && !pageContent.startsWith('Помилка:') && !executedReadUrls.includes(targetUrl)) {
-                  executedReadUrls.push(targetUrl);
-                  options?.onReadUrls?.([...executedReadUrls]);
-                }
+        for (const tc of toolCallsList) {
+          if (tc.function.name === 'web_search') {
+            const searchQuery = parseToolQuery(tc.function.arguments);
+            options?.onStatusChange?.(`Шукаю в мережі: «${searchQuery || '...'}»`);
 
-                roundMessages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  name: tc.function.name,
-                  content: pageContent
-                });
-              } else {
-                roundMessages.push({
-                  role: 'tool',
-                  tool_call_id: tc.id,
-                  name: tc.function.name,
-                  content: JSON.stringify({ error: `Невідомий інструмент: ${tc.function.name}` })
-                });
-              }
+            if (searchQuery && !executedQueries.includes(searchQuery)) {
+              executedQueries.push(searchQuery);
+              options?.onSearchQueries?.([...executedQueries]);
             }
 
-            options?.onStatusChange?.('Аналізую отримані дані...');
-            // Continue to next round so the model produces final answer with tool results
-            continue;
+            const searchResultJson = await executeWebSearch(
+              options?.searchUrl || DEFAULT_SEARCH_URL,
+              searchQuery,
+              signal,
+              !!options?.webReaderEnabled
+            );
+
+            roundMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              name: tc.function.name,
+              content: searchResultJson
+            });
+          } else if (tc.function.name === 'read_webpage') {
+            const targetUrl = parseToolUrl(tc.function.arguments);
+            options?.onStatusChange?.(`Читаю сторінку: ${targetUrl || '...'}`);
+
+            const pageContent = await executeReadWebpage(targetUrl, signal);
+
+            if (targetUrl && !pageContent.startsWith('Помилка:') && !executedReadUrls.includes(targetUrl)) {
+              executedReadUrls.push(targetUrl);
+              options?.onReadUrls?.([...executedReadUrls]);
+            }
+
+            roundMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              name: tc.function.name,
+              content: pageContent
+            });
+          } else {
+            roundMessages.push({
+              role: 'tool',
+              tool_call_id: tc.id,
+              name: tc.function.name,
+              content: JSON.stringify({ error: `Невідомий інструмент: ${tc.function.name}` })
+            });
           }
-
-          options?.onStatusChange?.(null);
-
-          if (totalAccumulatedText.length > 0) {
-            return totalAccumulatedText;
-          }
-
-          throw new Error("Отримано порожній потік тексту від моделі");
         }
-      } catch (err: any) {
-        options?.onStatusChange?.(null);
-        if (err.name === 'AbortError') {
-          throw err;
-        }
-        lastError = err;
-        if (err.message && (err.message.includes("401") || err.message.includes("402"))) {
-          throw err;
-        }
-        console.warn(`Спроба ${attempt + 1} не вдалася для ${baseUrl}:`, err.message);
+
+        options?.onStatusChange?.('Аналізую отримані дані...');
+        continue;
       }
+
+      options?.onStatusChange?.(null);
+
+      if (totalAccumulatedText.length > 0) {
+        return totalAccumulatedText;
+      }
+
+      throw new Error("Отримано порожній потік тексту від моделі");
+    }
+  } catch (err: any) {
+    options?.onStatusChange?.(null);
+    if (err?.name === 'AbortError' || signal?.aborted) {
+      throw err;
+    }
+    lastError = err;
+
+    const skipNonStreamFallback =
+      err?.statusCode === 401 ||
+      err?.statusCode === 402 ||
+      err?.isRateLimit ||
+      isRateLimitError(err?.message, err?.statusCode) ||
+      totalAccumulatedText.length > 0;
+
+    if (skipNonStreamFallback) {
+      throw err;
+    }
+
+    // Only attempt non-streaming fallback when streaming transport/parsing failed (never on 429/401/402)
+    try {
+      const nonStreamResult = await generateChatResponse(apiKey, modelId, prompt, history, options);
+      onChunk(nonStreamResult, nonStreamResult);
+      return nonStreamResult;
+    } catch (fallbackErr: any) {
+      throw lastError || fallbackErr;
     }
   }
 
-  // Graceful fallback attempt with non-streaming (also supports tool calling!)
-  try {
-    const nonStreamResult = await generateChatResponse(apiKey, modelId, prompt, history, options);
-    onChunk(nonStreamResult, nonStreamResult);
-    return nonStreamResult;
-  } catch (fallbackErr: any) {
-    throw lastError || fallbackErr;
-  }
+  throw lastError || new Error("Перевищено кількість викликів інструментів пошуку");
 }
 
 /**
@@ -1014,6 +1097,10 @@ export async function generateChatResponse(
     if (enableTools) {
       bodyPayload.tools = activeTools;
       bodyPayload.tool_choice = 'auto';
+    }
+
+    if (round > 0) {
+      await sleepWithAbort(900);
     }
 
     const data = await fetchWithFallback('/chat/completions', {
