@@ -1112,7 +1112,7 @@ export default function App() {
                 : 'Користувач';
               const formatUah = (val: number) => {
                 if (!Number.isFinite(val) || val <= 0) return '₴0.00';
-                if (val >= 1) return `₴${val.toFixed(2)}`;
+                if (val >= 0.01) return `₴${val.toFixed(2)}`;
                 return `₴${val.toFixed(3)}`;
               };
               const formatUsd = (val: number) => {
@@ -1126,7 +1126,7 @@ export default function App() {
                 : apiBalance && apiBalance.remainingUah !== null && apiBalance.remainingUsd !== null
                   ? `Баланс: ${formatUah(apiBalance.remainingUah)} (${formatUsd(apiBalance.remainingUsd)}) • Натисніть, щоб оновити`
                   : apiBalance?.source === 'usage_only'
-                    ? 'Ключ блокує перегляд загального балансу (увімкніть доступ до балансу в налаштуваннях токена на сайті). Натисніть, щоб оновити'
+                    ? 'Ключ не передає залишок балансу. Увімкніть «Allow querying user quota» в налаштуваннях ключа на scout-ai.pp.ua або перевипустіть ключ.'
                     : 'Натисніть, щоб оновити баланс';
 
               return (
@@ -1187,7 +1187,7 @@ export default function App() {
                         ) : apiBalance && apiBalance.source === 'usage_only' ? (
                           <span className="inline-flex items-center gap-1.5 text-[#A5A199] truncate">
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                            <span>Витрачено {formatUah(apiBalance.usedUah ?? 0)}</span>
+                            <span>₴ —</span>
                             <RefreshCw
                               size={10}
                               className={`shrink-0 transition-opacity ${
