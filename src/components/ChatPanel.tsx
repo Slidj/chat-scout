@@ -155,6 +155,8 @@ export function ChatPanel({
     }
   }, [activeChatId, activeAgent?.id, savedChats, isOpen]);
 
+  const effectiveModel = activeAgent?.modelId || selectedModel || '';
+
   const persistChat = (msgs: Message[], customTitle?: string) => {
     if (msgs.length === 0) return;
     const title = customTitle || (currentTitle !== 'Новий чат' ? currentTitle : (msgs[0]?.text?.slice(0, 45) || 'Діалог'));
@@ -165,7 +167,7 @@ export function ChatPanel({
       id: currentChatId,
       userId: currentUid,
       title,
-      modelId: selectedModel || '',
+      modelId: effectiveModel,
       agentId: activeAgent?.id,
       agentName: activeAgent?.name,
       messages: msgs,
@@ -354,7 +356,7 @@ export function ChatPanel({
   };
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || !apiKey || !selectedModel || isLoading) return;
+    if (!inputValue.trim() || !apiKey || !effectiveModel || isLoading) return;
 
     // Abort any previous request & stop fluid loop
     if (abortControllerRef.current) {
@@ -410,7 +412,7 @@ export function ChatPanel({
       // Real-time token streaming with smooth fluid animation + Custom Agent System Prompt & Tool Calling
       await streamChatResponse(
         apiKey,
-        selectedModel,
+        effectiveModel,
         userText,
         newHistory.slice(0, -1),
         (_chunk, accumulated) => {
@@ -455,7 +457,7 @@ export function ChatPanel({
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
-        modelId: activeAgent ? `${activeAgent.name} (${selectedModel})` : selectedModel,
+        modelId: activeAgent ? `${activeAgent.name} (${effectiveModel})` : effectiveModel,
         promptSnippet: userText.slice(0, 100),
         durationMs,
         status: 'success'
@@ -473,7 +475,7 @@ export function ChatPanel({
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
-        modelId: activeAgent ? `${activeAgent.name} (${selectedModel})` : selectedModel,
+        modelId: activeAgent ? `${activeAgent.name} (${effectiveModel})` : effectiveModel,
         promptSnippet: userText.slice(0, 100),
         durationMs,
         status: 'error',
@@ -514,7 +516,7 @@ export function ChatPanel({
     
     // Find last user message
     const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-    if (!lastUserMessage || !apiKey || !selectedModel) return;
+    if (!lastUserMessage || !apiKey || !effectiveModel) return;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -549,7 +551,7 @@ export function ChatPanel({
     try {
       await streamChatResponse(
         apiKey,
-        selectedModel,
+        effectiveModel,
         lastUserMessage.text,
         historyWithoutLast.slice(0, -1),
         (_chunk, accumulated) => {
@@ -592,7 +594,7 @@ export function ChatPanel({
       logQueryEvent({
         userId: currentUser?.id ? String(currentUser.id) : getOrInitClientId(),
         userName: currentUser?.first_name || (currentUser?.username ? `@${currentUser.username}` : 'Web User'),
-        modelId: activeAgent ? `${activeAgent.name} (${selectedModel})` : selectedModel,
+        modelId: activeAgent ? `${activeAgent.name} (${effectiveModel})` : effectiveModel,
         promptSnippet: lastUserMessage.text.slice(0, 100),
         durationMs,
         status: 'success'
@@ -728,7 +730,7 @@ export function ChatPanel({
             {(activeAgent || currentTitle !== 'Новий чат') && (
               <span className="text-[11px] text-[#9E9A92] truncate max-w-[210px] sm:max-w-xs">
                 {activeAgent
-                  ? `${activeAgent.name} • ${selectedModel || activeAgent.modelId}`
+                  ? `${activeAgent.name} • ${effectiveModel}`
                   : (activeModelObj?.name || selectedModel || 'Чат')}
               </span>
             )}
@@ -860,7 +862,7 @@ export function ChatPanel({
                   </p>
                 )}
                 <div className="text-[11px] font-mono text-[#7E7B74]">
-                  Модель: <span className="text-[#C8C3B8]">{selectedModel || activeAgent.modelId}</span>
+                  Модель: <span className="text-[#C8C3B8]">{effectiveModel}</span>
                 </div>
               </div>
             ) : (
@@ -941,7 +943,7 @@ export function ChatPanel({
             }}
             onKeyDown={handleKeyDown}
             placeholder={activeAgent ? `Напишіть агенту ${activeAgent.name}...` : `Reply to ${activeModelObj?.name || selectedModel || 'Claude'}...`}
-            disabled={!apiKey || !selectedModel || isLoading}
+            disabled={!apiKey || !effectiveModel || isLoading}
             className="w-full bg-transparent px-2.5 pt-1 text-[16.5px] leading-[1.5] text-[#EDE9DF] placeholder-[#7E7B74] focus:outline-none resize-none"
             style={{ maxHeight: '120px' }}
           />
@@ -960,7 +962,8 @@ export function ChatPanel({
                 <Plus size={18} />
               </button>
 
-              {/* Model Selector Pill (Screenshot 4) */}
+              {/* Model Selector Pill (only shown in direct model chats; agents use their built-in model) */}
+              {!activeAgent && (
               <div className="relative" ref={dropdownRef}>
                 <button
                   type="button"
@@ -1029,6 +1032,7 @@ export function ChatPanel({
                   </div>
                 )}
               </div>
+              )}
             </div>
 
             {/* Right: Send, Stop or Mic Button */}
@@ -1046,7 +1050,7 @@ export function ChatPanel({
                 <button
                   type="button"
                   onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || !apiKey || !selectedModel}
+                  disabled={!inputValue.trim() || !apiKey || !effectiveModel}
                   className="w-9 h-9 rounded-full bg-[#CC785C] hover:bg-[#D97757] text-white flex items-center justify-center shadow-md active:scale-95 transition-all"
                   title="Надіслати"
                 >
@@ -1320,6 +1324,8 @@ export function ChatPanel({
                   const isActive = chat.id === currentChatId;
                   const chatModelObj = apiModels.find(m => m.id === chat.modelId);
                   const modelTitle = chatModelObj?.name || chat.modelId.split('/').pop() || 'Модель';
+                  const isAgentChat = Boolean(chat.agentId || chat.agentName);
+                  const matchedAgentName = chat.agentName || (chat.agentId ? agents.find(a => a.id === chat.agentId)?.name : undefined);
 
                   return (
                     <div
@@ -1344,9 +1350,15 @@ export function ChatPanel({
                         </button>
                       </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-[#8A8780]">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="px-1.5 py-0.5 rounded bg-[#1A1917] border border-[#2E2C28] text-[#D8D4CC] font-mono text-[10px] truncate max-w-[130px]">
+                      <div className="flex items-center justify-between gap-2 text-[11px] text-[#8A8780]">
+                        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                          {isAgentChat && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#2D221D] border border-[#CC785C]/45 text-[#E59275] font-semibold text-[10px] shrink-0 max-w-[130px]">
+                              <Bot size={10} className="shrink-0" />
+                              <span className="truncate">{matchedAgentName ? `Агент: ${matchedAgentName}` : 'Агент'}</span>
+                            </span>
+                          )}
+                          <span className="px-1.5 py-0.5 rounded bg-[#1A1917] border border-[#2E2C28] text-[#D8D4CC] font-mono text-[10px] truncate max-w-[115px]">
                             {modelTitle}
                           </span>
                           <span>•</span>

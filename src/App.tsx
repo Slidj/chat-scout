@@ -995,6 +995,8 @@ export default function App() {
                 <div className="space-y-1">
                   {userChats.slice(0, 30).map(chat => {
                     const isSelected = activeChatId === chat.id && isChatOpen;
+                    const isAgentChat = Boolean(chat.agentId || chat.agentName);
+                    const matchedAgentName = chat.agentName || (chat.agentId ? agents.find(a => a.id === chat.agentId)?.name : undefined);
                     return (
                       <div
                         key={chat.id}
@@ -1004,14 +1006,26 @@ export default function App() {
                             ? 'bg-[#2E2C29] text-[#ECE8E1] font-semibold border border-[#3E3C37]' 
                             : 'text-[#9E9A92] hover:text-[#ECE8E1] hover:bg-[#242320]'
                         }`}
-                        title={chat.title || 'Чат'}
+                        title={matchedAgentName ? `${chat.title || 'Чат'} • Агент: ${matchedAgentName}` : (chat.title || 'Чат')}
                       >
                         <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-1">
-                          <MessageSquare 
-                            size={15} 
-                            className={`shrink-0 ${isSelected ? 'text-[#CC785C]' : 'text-[#76736C] group-hover:text-[#CC785C]'}`} 
-                          />
+                          {isAgentChat ? (
+                            <Bot 
+                              size={15} 
+                              className={`shrink-0 ${isSelected ? 'text-[#CC785C]' : 'text-[#CC785C]/80 group-hover:text-[#CC785C]'}`} 
+                            />
+                          ) : (
+                            <MessageSquare 
+                              size={15} 
+                              className={`shrink-0 ${isSelected ? 'text-[#CC785C]' : 'text-[#76736C] group-hover:text-[#CC785C]'}`} 
+                            />
+                          )}
                           <span className="truncate font-medium">{chat.title || 'Новий діалог'}</span>
+                          {isAgentChat && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#2D221D] border border-[#CC785C]/40 text-[#E59275] text-[9.5px] font-semibold shrink-0">
+                              Агент
+                            </span>
+                          )}
                         </div>
 
                         {/* Delete Chat Button (Visible on hover on desktop, always accessible on mobile) */}
