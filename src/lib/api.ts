@@ -423,6 +423,139 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
   }
 }
 
+export interface ApiBalanceInfo {
+  remainingUsd: number;
+  usedUsd?: number;
+  grantedUsd?: number;
+  unlimited?: boolean;
+  updatedAt: number;
+}
+
+/**
+ * Fetches live remaining balance/quota for the user's personal API key from scout-ai.pp.ua (New API).
+ * Supports both /api/usage/token/ and OpenAI-compatible /v1/dashboard/billing/* fallback.
+ */
+export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | null> {
+  const cleanKey = (apiKey || '').trim();
+  if (!cleanKey) return null;
+
+  const baseRoot = BASE_URLS[0].replace(/\/v1\/?$/, '');
+  const authHeaders = {
+    'Authorization': `Bearer ${cleanKey}`,
+    'Accept': 'application/json'
+  };
+
+  // Helper for /v1/dashboard/billing/subscription + /usage
+  const fetchOpenAiStyleBilling = async (): Promise<ApiBalanceInfo | null> => {
+    const subRes = await fetch(`${baseRoot}/v1/dashboard/billing/subscription`, {
+      method: 'GET',
+      headers: authHeaders
+    });
+    if (subRes.status === 401) {
+      throw new Error('Невірний API ключ');
+    }
+    if (!subRes.ok) return null;
+
+    const subData = await subRes.json();
+    const hardLimit = Number(subData?.hard_limit_usd ?? subData?.system_hard_limit_usd);
+    if (!Number.isFinite(hardLimit)) return null;
+
+    const end = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const start = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().split('T')[0];
+
+    let usedUsd = 0;
+    try {
+      const usageRes = await fetch(
+        `${baseRoot}/v1/dashboard/billing/usage?start_date=${fmt(start)}&end_date=${fmt(end)}`,
+        { method: 'GET', headers: authHeaders }
+      );
+      if (usageRes.ok) {
+        const usageData = await usageRes.json();
+        const totalCents = Number(usageData?.total_usage);
+        if (Number.isFinite(totalCents)) {
+          usedUsd = Math.max(0, totalCents / 100);
+        }
+      }
+    } catch {}
+
+    // New API reports huge placeholder hardLimit (e.g. >= 1000000) for unlimited accounts
+    if (hardLimit >= 100000) {
+      return {
+        remainingUsd: hardLimit,
+        usedUsd,
+        grantedUsd: hardLimit,
+        unlimited: true,
+        updatedAt: Date.now()
+      };
+    }
+
+    return {
+      remainingUsd: Math.max(0, hardLimit - usedUsd),
+      usedUsd,
+      grantedUsd: hardLimit,
+      unlimited: false,
+      updatedAt: Date.now()
+    };
+  };
+
+  // 1. Primary: New API /api/usage/token/
+  try {
+    const res = await fetch(`${baseRoot}/api/usage/token/`, {
+      method: 'GET',
+      headers: authHeaders
+    });
+    if (res.status === 401) {
+      throw new Error('Невірний API ключ');
+    }
+    if (res.ok) {
+      const json = await res.json();
+      const d = json?.data ?? json;
+      const available = Number(d?.total_available);
+      const used = Number(d?.total_used ?? 0);
+      const granted = Number(d?.total_granted ?? 0);
+      const isUnlimitedFlag = Boolean(d?.unlimited_quota);
+
+      // If token itself has unlimited_quota, check user's subscription balance in case user quota is finite
+      if (isUnlimitedFlag && (available <= 0 || available >= 100000)) {
+        const subInfo = await fetchOpenAiStyleBilling().catch(() => null);
+        if (subInfo) return subInfo;
+        return {
+          remainingUsd: Number.isFinite(available) ? available : 0,
+          usedUsd: Number.isFinite(used) ? used : 0,
+          grantedUsd: Number.isFinite(granted) ? granted : 0,
+          unlimited: true,
+          updatedAt: Date.now()
+        };
+      }
+
+      if (Number.isFinite(available)) {
+        return {
+          remainingUsd: Math.max(0, available),
+          usedUsd: Number.isFinite(used) ? Math.max(0, used) : 0,
+          grantedUsd: Number.isFinite(granted) ? Math.max(0, granted) : 0,
+          unlimited: available >= 100000,
+          updatedAt: Date.now()
+        };
+      }
+    }
+  } catch (err: any) {
+    if (err?.message?.includes('Невірний API ключ')) {
+      throw err;
+    }
+  }
+
+  // 2. Fallback: OpenAI-compatible billing endpoints
+  try {
+    return await fetchOpenAiStyleBilling();
+  } catch (err: any) {
+    if (err?.message?.includes('Невірний API ключ')) {
+      throw err;
+    }
+    return null;
+  }
+}
+
 /**
  * Sanitizes conversation history for strict LLM providers (Google AI Studio, Claude, OpenAI).
  * - Strips error messages so failed requests don't poison subsequent prompts

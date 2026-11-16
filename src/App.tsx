@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
   Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
-  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe, FileText
+  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe, FileText, RefreshCw
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
@@ -11,7 +11,7 @@ import { TopupModal } from './components/TopupModal';
 import { CouponCardModal } from './components/CouponCardModal';
 import { AppPreloader } from './components/AppPreloader';
 import { Provider, AiModel, Agent } from './types';
-import { fetchModels, Model } from './lib/api';
+import { fetchModels, fetchApiBalance, ApiBalanceInfo, Model } from './lib/api';
 import { 
   getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
   TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups,
@@ -67,6 +67,10 @@ export default function App() {
   // Api State
   const [apiModels, setApiModels] = useState<Model[]>([]);
   const [activeChatModelId, setActiveChatModelId] = useState<string>(''); // The actual model ID used for chat
+  const [apiBalance, setApiBalance] = useState<ApiBalanceInfo | null>(null);
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const lastBalanceFetchRef = useRef<number>(0);
 
   const [tgUser, setTgUser] = useState<any>(null);
   const [isUserBlocked, setIsUserBlocked] = useState(false);
@@ -202,11 +206,65 @@ export default function App() {
 
   const unreadCouponsCount = userCoupons.filter(c => !c.isRead).length;
 
+  const refreshApiBalance = useCallback(async (force = false, keyOverride?: string) => {
+    const keyToUse = (keyOverride ?? apiKey).trim();
+    if (!keyToUse) {
+      setApiBalance(null);
+      setBalanceError(null);
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - lastBalanceFetchRef.current < 2500) {
+      return;
+    }
+    lastBalanceFetchRef.current = now;
+    setIsLoadingBalance(true);
+    try {
+      const info = await fetchApiBalance(keyToUse);
+      if (info) {
+        setApiBalance(info);
+        setBalanceError(null);
+      }
+    } catch (err: any) {
+      if (err?.message?.includes('Невірний API ключ')) {
+        setApiBalance(null);
+        setBalanceError('Невірний ключ');
+      }
+    } finally {
+      setIsLoadingBalance(false);
+    }
+  }, [apiKey]);
+
   useEffect(() => {
     if (apiKey) {
       loadApiModels(apiKey);
+      refreshApiBalance(true, apiKey);
+    } else {
+      setApiBalance(null);
+      setBalanceError(null);
     }
-  }, [apiKey]);
+  }, [apiKey, refreshApiBalance]);
+
+  // Refresh live balance whenever drawer is opened or app returns to foreground
+  useEffect(() => {
+    if (isDrawerOpen && apiKey) {
+      refreshApiBalance(true);
+    }
+  }, [isDrawerOpen, apiKey, refreshApiBalance]);
+
+  useEffect(() => {
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === 'visible' && apiKey) {
+        refreshApiBalance(false);
+      }
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+    return () => {
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, [apiKey, refreshApiBalance]);
 
   const loadApiModels = async (key: string) => {
     try {
@@ -221,6 +279,7 @@ export default function App() {
     setApiKey(key);
     localStorage.setItem('app_api_key', key);
     loadApiModels(key);
+    refreshApiBalance(true, key);
   };
 
   const goHome = () => {
@@ -855,7 +914,7 @@ export default function App() {
 
         {/* Drawer Panel */}
         <div 
-          className={`relative w-72 sm:w-80 bg-[#191816] border-r border-[#2C2B27] h-full flex flex-col p-5 shadow-2xl z-10 transform transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          className={`relative w-[82vw] max-w-[320px] sm:w-80 bg-[#191816] border-r border-[#2C2B27] h-full flex flex-col p-4 sm:p-5 shadow-2xl z-10 transform transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
             isDrawerOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
           onClick={(e) => e.stopPropagation()}
@@ -1044,30 +1103,95 @@ export default function App() {
               )}
             </div>
 
-            {/* Bottom Bar: User Avatar & New Chat (Screenshot 1) */}
-            <div className="pt-4 border-t border-[#2C2B27] flex items-center justify-between">
-              {/* User Avatar in signature Claude Terracotta #CC785C */}
-              {tgUser?.photo_url ? (
-                <img 
-                  src={tgUser.photo_url} 
-                  alt={tgUser.first_name} 
-                  className="w-10 h-10 rounded-full object-cover border border-[#44413C]" 
-                />
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-[#CC785C] text-white font-bold flex items-center justify-center text-sm shadow-sm">
-                  {tgUser?.first_name ? tgUser.first_name.charAt(0).toUpperCase() : 'Є'}
-                </div>
-              )}
+            {/* Bottom Bar: User Avatar, Simple Name, Live Balance & New Chat */}
+            {(() => {
+              const rawFirst = typeof tgUser?.first_name === 'string' ? tgUser.first_name.trim() : '';
+              const rawLast = typeof tgUser?.last_name === 'string' ? tgUser.last_name.trim() : '';
+              const displayName = rawFirst
+                ? `${rawFirst}${rawLast ? ` ${rawLast}` : ''}`
+                : 'Користувач';
+              const formatBalance = (val: number) => {
+                if (!Number.isFinite(val) || val <= 0) return '$0.00';
+                if (val >= 100) return `$${val.toFixed(2)}`;
+                if (val >= 1) return `$${val.toFixed(3)}`;
+                return `$${val.toFixed(4)}`;
+              };
 
-              {/* + New chat Pill in drawer */}
-              <button
-                onClick={() => { handleStartNewChat(); setIsDrawerOpen(false); }}
-                className="bg-[#FAF8F5] hover:bg-white text-black font-semibold text-xs px-4 py-2 rounded-full shadow-md flex items-center gap-1.5 transition-all"
-              >
-                <Plus size={16} />
-                <span>New chat</span>
-              </button>
-            </div>
+              return (
+                <div className="pt-3.5 border-t border-[#2C2B27] flex items-center justify-between gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!apiKey) {
+                        setIsSettingsOpen(true);
+                        setIsDrawerOpen(false);
+                      } else {
+                        refreshApiBalance(true);
+                      }
+                    }}
+                    className="flex items-center gap-2.5 min-w-0 flex-1 text-left group rounded-xl p-1 -ml-1 hover:bg-[#23221F] transition-colors"
+                    title={apiKey ? 'Натисніть, щоб оновити баланс' : 'Вкажіть API ключ'}
+                  >
+                    {tgUser?.photo_url ? (
+                      <img 
+                        src={tgUser.photo_url} 
+                        alt={displayName} 
+                        className="w-10 h-10 rounded-full object-cover border border-[#44413C] shrink-0" 
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-[#CC785C] text-white font-bold flex items-center justify-center text-sm shadow-sm shrink-0">
+                        {displayName.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13.5px] font-semibold text-[#ECE8E1] truncate leading-tight">
+                        {displayName}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-0.5 text-[11.5px] font-medium tabular-nums">
+                        {!apiKey ? (
+                          <span className="text-[#8A8780] truncate">Вкажіть API ключ</span>
+                        ) : balanceError ? (
+                          <span className="text-rose-400 truncate">{balanceError}</span>
+                        ) : apiBalance?.unlimited ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-400 truncate">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                            <span>Безліміт</span>
+                          </span>
+                        ) : apiBalance ? (
+                          <span className="inline-flex items-center gap-1.5 text-emerald-400 truncate">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                            <span>{formatBalance(apiBalance.remainingUsd)}</span>
+                            <RefreshCw
+                              size={10}
+                              className={`shrink-0 transition-opacity ${
+                                isLoadingBalance
+                                  ? 'animate-spin text-[#CC785C] opacity-100'
+                                  : 'text-[#6E6B64] opacity-70 group-hover:opacity-100'
+                              }`}
+                            />
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[#8A8780]">
+                            <RefreshCw size={10} className={isLoadingBalance ? 'animate-spin' : ''} />
+                            <span>Баланс...</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* + New chat Pill in drawer */}
+                  <button
+                    onClick={() => { handleStartNewChat(); setIsDrawerOpen(false); }}
+                    className="bg-[#FAF8F5] hover:bg-white text-black font-semibold text-xs px-3.5 py-2 rounded-full shadow-md flex items-center gap-1.5 transition-all shrink-0 whitespace-nowrap active:scale-95"
+                  >
+                    <Plus size={15} />
+                    <span>New chat</span>
+                  </button>
+                </div>
+              );
+            })()}
 
           </div>
         </div>
@@ -1075,7 +1199,10 @@ export default function App() {
       {/* Claude Chat Panel Overlay */}
       <ChatPanel
         isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
+        onClose={() => {
+          setIsChatOpen(false);
+          refreshApiBalance(true);
+        }}
         apiKey={apiKey}
         selectedModel={activeChatModelId}
         onChangeModel={setActiveChatModelId}
@@ -1087,6 +1214,7 @@ export default function App() {
         activeAgent={activeAgent ? (agents.find(a => a.id === activeAgent.id) || activeAgent) : null}
         agents={agents}
         onSelectAgent={setActiveAgent}
+        onBalanceChange={() => refreshApiBalance(true)}
       />
 
       {/* Settings Modal */}
@@ -1108,7 +1236,10 @@ export default function App() {
       {/* Coupon Digital Card Modal */}
       <CouponCardModal
         isOpen={isCouponModalOpen}
-        onClose={() => setIsCouponModalOpen(false)}
+        onClose={() => {
+          setIsCouponModalOpen(false);
+          refreshApiBalance(true);
+        }}
         coupons={userCoupons}
         onStartChat={handleStartNewChat}
       />

@@ -39,6 +39,7 @@ interface ChatPanelProps {
   activeAgent?: Agent | null;
   agents?: Agent[];
   onSelectAgent?: (agent: Agent | null) => void;
+  onBalanceChange?: () => void;
 }
 
 export function ChatPanel({ 
@@ -54,7 +55,8 @@ export function ChatPanel({
   activeChatId,
   activeAgent = null,
   agents = [],
-  onSelectAgent
+  onSelectAgent,
+  onBalanceChange
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -351,6 +353,9 @@ export function ChatPanel({
         persistChat(updated);
         return updated;
       });
+      if (onBalanceChange) {
+        setTimeout(onBalanceChange, 700);
+      }
     }
     setTypingMessageId(null);
   };
@@ -462,6 +467,9 @@ export function ChatPanel({
         durationMs,
         status: 'success'
       });
+      if (onBalanceChange) {
+        setTimeout(onBalanceChange, 700);
+      }
     } catch (error: any) {
       isStreamingActiveRef.current = false;
       setToolStatus(null);
@@ -599,6 +607,9 @@ export function ChatPanel({
         durationMs,
         status: 'success'
       });
+      if (onBalanceChange) {
+        setTimeout(onBalanceChange, 700);
+      }
     } catch (error: any) {
       isStreamingActiveRef.current = false;
       setToolStatus(null);
