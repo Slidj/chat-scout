@@ -1110,12 +1110,24 @@ export default function App() {
               const displayName = rawFirst
                 ? `${rawFirst}${rawLast ? ` ${rawLast}` : ''}`
                 : 'Користувач';
-              const formatBalance = (val: number) => {
-                if (!Number.isFinite(val) || val <= 0) return '$0.00';
-                if (val >= 100) return `$${val.toFixed(2)}`;
-                if (val >= 1) return `$${val.toFixed(3)}`;
-                return `$${val.toFixed(4)}`;
+              const formatUah = (val: number) => {
+                if (!Number.isFinite(val) || val <= 0) return '₴0.00';
+                if (val >= 1) return `₴${val.toFixed(2)}`;
+                return `₴${val.toFixed(3)}`;
               };
+              const formatUsd = (val: number) => {
+                if (!Number.isFinite(val) || val <= 0) return '$0.00';
+                if (val >= 10) return `$${val.toFixed(2)}`;
+                return `$${val.toFixed(3)}`;
+              };
+
+              const balanceTooltip = !apiKey
+                ? 'Вкажіть API ключ'
+                : apiBalance && apiBalance.remainingUah !== null && apiBalance.remainingUsd !== null
+                  ? `Баланс: ${formatUah(apiBalance.remainingUah)} (${formatUsd(apiBalance.remainingUsd)}) • Натисніть, щоб оновити`
+                  : apiBalance?.source === 'usage_only'
+                    ? 'Ключ блокує перегляд загального балансу (увімкніть доступ до балансу в налаштуваннях токена на сайті). Натисніть, щоб оновити'
+                    : 'Натисніть, щоб оновити баланс';
 
               return (
                 <div className="pt-3.5 border-t border-[#2C2B27] flex items-center justify-between gap-2.5">
@@ -1130,7 +1142,7 @@ export default function App() {
                       }
                     }}
                     className="flex items-center gap-2.5 min-w-0 flex-1 text-left group rounded-xl p-1 -ml-1 hover:bg-[#23221F] transition-colors"
-                    title={apiKey ? 'Натисніть, щоб оновити баланс' : 'Вкажіть API ключ'}
+                    title={balanceTooltip}
                   >
                     {tgUser?.photo_url ? (
                       <img 
@@ -1153,15 +1165,29 @@ export default function App() {
                           <span className="text-[#8A8780] truncate">Вкажіть API ключ</span>
                         ) : balanceError ? (
                           <span className="text-rose-400 truncate">{balanceError}</span>
-                        ) : apiBalance?.unlimited ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-400 truncate">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                            <span>Безліміт</span>
-                          </span>
-                        ) : apiBalance ? (
+                        ) : apiBalance && apiBalance.remainingUah !== null ? (
                           <span className="inline-flex items-center gap-1.5 text-emerald-400 truncate">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                            <span>{formatBalance(apiBalance.remainingUsd)}</span>
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                apiBalance.remainingUah > 0 ? 'bg-emerald-400' : 'bg-rose-400'
+                              }`}
+                            />
+                            <span className={apiBalance.remainingUah > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                              {formatUah(apiBalance.remainingUah)}
+                            </span>
+                            <RefreshCw
+                              size={10}
+                              className={`shrink-0 transition-opacity ${
+                                isLoadingBalance
+                                  ? 'animate-spin text-[#CC785C] opacity-100'
+                                  : 'text-[#6E6B64] opacity-70 group-hover:opacity-100'
+                              }`}
+                            />
+                          </span>
+                        ) : apiBalance && apiBalance.source === 'usage_only' ? (
+                          <span className="inline-flex items-center gap-1.5 text-[#A5A199] truncate">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                            <span>Витрачено {formatUah(apiBalance.usedUah ?? 0)}</span>
                             <RefreshCw
                               size={10}
                               className={`shrink-0 transition-opacity ${

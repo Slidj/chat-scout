@@ -423,17 +423,24 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
   }
 }
 
+export const SCOUT_QUOTA_PER_UNIT = 500000;
+export const SCOUT_UAH_EXCHANGE_RATE = 44.37;
+
 export interface ApiBalanceInfo {
-  remainingUsd: number;
+  remainingUsd: number | null;
+  remainingUah: number | null;
   usedUsd?: number;
-  grantedUsd?: number;
-  unlimited?: boolean;
+  usedUah?: number;
+  source: 'user_quota' | 'subscription' | 'token_quota' | 'usage_only';
   updatedAt: number;
 }
 
 /**
- * Fetches live remaining balance/quota for the user's personal API key from scout-ai.pp.ua (New API).
- * Supports both /api/usage/token/ and OpenAI-compatible /v1/dashboard/billing/* fallback.
+ * Fetches live remaining balance for the user's personal API key from scout-ai.pp.ua (New API).
+ * Note: New API /api/usage/token/ returns raw internal quota units (500,000 = $1 USD).
+ * When a token has unlimited_quota enabled, that only disables the per-key cap ("fuse")
+ * so requests draw directly from the user's real account balance (d.user_quota.total_available).
+ * We always extract the actual numeric balance and never report "unlimited".
  */
 export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | null> {
   const cleanKey = (apiKey || '').trim();
@@ -445,8 +452,15 @@ export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | 
     'Accept': 'application/json'
   };
 
-  // Helper for /v1/dashboard/billing/subscription + /usage
-  const fetchOpenAiStyleBilling = async (): Promise<ApiBalanceInfo | null> => {
+  const quotaToUsd = (quota: number) => Math.max(0, quota / SCOUT_QUOTA_PER_UNIT);
+  const usdToUah = (usd: number) => Math.max(0, usd * SCOUT_UAH_EXCHANGE_RATE);
+
+  // Helper for OpenAI-compatible /v1/dashboard/billing/subscription + /usage
+  // Note: New API returns `hard_limit_usd = 100000000` sentinel when DisplayTokenStatEnabled=true & token.UnlimitedQuota=true.
+  const fetchOpenAiStyleBilling = async (): Promise<{
+    remainingUsd: number | null;
+    usedUsd: number;
+  } | null> => {
     const subRes = await fetch(`${baseRoot}/v1/dashboard/billing/subscription`, {
       method: 'GET',
       headers: authHeaders
@@ -457,6 +471,8 @@ export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | 
     if (!subRes.ok) return null;
 
     const subData = await subRes.json();
+    if (subData?.error) return null;
+
     const hardLimit = Number(subData?.hard_limit_usd ?? subData?.system_hard_limit_usd);
     if (!Number.isFinite(hardLimit)) return null;
 
@@ -479,27 +495,21 @@ export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | 
       }
     } catch {}
 
-    // New API reports huge placeholder hardLimit (e.g. >= 1000000) for unlimited accounts
-    if (hardLimit >= 100000) {
+    // 100000000 is New API's hardcoded sentinel when token.UnlimitedQuota hides real balance on subscription endpoint
+    if (hardLimit >= 10000000) {
       return {
-        remainingUsd: hardLimit,
-        usedUsd,
-        grantedUsd: hardLimit,
-        unlimited: true,
-        updatedAt: Date.now()
+        remainingUsd: null,
+        usedUsd
       };
     }
 
     return {
       remainingUsd: Math.max(0, hardLimit - usedUsd),
-      usedUsd,
-      grantedUsd: hardLimit,
-      unlimited: false,
-      updatedAt: Date.now()
+      usedUsd
     };
   };
 
-  // 1. Primary: New API /api/usage/token/
+  // 1. Primary: New API /api/usage/token/ (CORS-enabled, TokenAuthReadOnly)
   try {
     const res = await fetch(`${baseRoot}/api/usage/token/`, {
       method: 'GET',
@@ -511,33 +521,68 @@ export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | 
     if (res.ok) {
       const json = await res.json();
       const d = json?.data ?? json;
-      const available = Number(d?.total_available);
-      const used = Number(d?.total_used ?? 0);
-      const granted = Number(d?.total_granted ?? 0);
+
+      const userAvailRaw = Number(d?.user_quota?.total_available);
+      const userUsedRaw = Number(d?.user_quota?.total_used);
+      const tokenAvailRaw = Number(d?.total_available);
+      const tokenUsedRaw = Number(d?.total_used ?? 0);
       const isUnlimitedFlag = Boolean(d?.unlimited_quota);
 
-      // If token itself has unlimited_quota, check user's subscription balance in case user quota is finite
-      if (isUnlimitedFlag && (available <= 0 || available >= 100000)) {
-        const subInfo = await fetchOpenAiStyleBilling().catch(() => null);
-        if (subInfo) return subInfo;
+      const usedUsd = Number.isFinite(userUsedRaw)
+        ? quotaToUsd(userUsedRaw)
+        : (Number.isFinite(tokenUsedRaw) ? quotaToUsd(tokenUsedRaw) : 0);
+
+      // Prefer user_quota.total_available — this is the real account balance even when token has unlimited_quota=true
+      if (d?.user_quota && Number.isFinite(userAvailRaw)) {
+        const remainingUsd = quotaToUsd(userAvailRaw);
         return {
-          remainingUsd: Number.isFinite(available) ? available : 0,
-          usedUsd: Number.isFinite(used) ? used : 0,
-          grantedUsd: Number.isFinite(granted) ? granted : 0,
-          unlimited: true,
+          remainingUsd,
+          remainingUah: usdToUah(remainingUsd),
+          usedUsd,
+          usedUah: usdToUah(usedUsd),
+          source: 'user_quota',
           updatedAt: Date.now()
         };
       }
 
-      if (Number.isFinite(available)) {
+      // If token lacks user_quota (AllowUserQuotaQuery disabled), try subscription endpoint
+      const subBilling = await fetchOpenAiStyleBilling().catch(() => null);
+      if (subBilling && subBilling.remainingUsd !== null) {
+        const remainingUsd = subBilling.remainingUsd;
+        const effectiveUsed = subBilling.usedUsd > 0 ? subBilling.usedUsd : usedUsd;
         return {
-          remainingUsd: Math.max(0, available),
-          usedUsd: Number.isFinite(used) ? Math.max(0, used) : 0,
-          grantedUsd: Number.isFinite(granted) ? Math.max(0, granted) : 0,
-          unlimited: available >= 100000,
+          remainingUsd,
+          remainingUah: usdToUah(remainingUsd),
+          usedUsd: effectiveUsed,
+          usedUah: usdToUah(effectiveUsed),
+          source: 'subscription',
           updatedAt: Date.now()
         };
       }
+
+      // If key has a finite token cap and user_quota wasn't exposed
+      if (!isUnlimitedFlag && Number.isFinite(tokenAvailRaw)) {
+        const remainingUsd = quotaToUsd(tokenAvailRaw);
+        return {
+          remainingUsd,
+          remainingUah: usdToUah(remainingUsd),
+          usedUsd,
+          usedUah: usdToUah(usedUsd),
+          source: 'token_quota',
+          updatedAt: Date.now()
+        };
+      }
+
+      // Key is unlimited AND server withheld user_quota from this token: show real spent amount instead of "Unlimited"
+      const finalUsed = subBilling ? Math.max(usedUsd, subBilling.usedUsd) : usedUsd;
+      return {
+        remainingUsd: null,
+        remainingUah: null,
+        usedUsd: finalUsed,
+        usedUah: usdToUah(finalUsed),
+        source: 'usage_only',
+        updatedAt: Date.now()
+      };
     }
   } catch (err: any) {
     if (err?.message?.includes('Невірний API ключ')) {
@@ -547,7 +592,26 @@ export async function fetchApiBalance(apiKey: string): Promise<ApiBalanceInfo | 
 
   // 2. Fallback: OpenAI-compatible billing endpoints
   try {
-    return await fetchOpenAiStyleBilling();
+    const subBilling = await fetchOpenAiStyleBilling();
+    if (!subBilling) return null;
+    if (subBilling.remainingUsd !== null) {
+      return {
+        remainingUsd: subBilling.remainingUsd,
+        remainingUah: usdToUah(subBilling.remainingUsd),
+        usedUsd: subBilling.usedUsd,
+        usedUah: usdToUah(subBilling.usedUsd),
+        source: 'subscription',
+        updatedAt: Date.now()
+      };
+    }
+    return {
+      remainingUsd: null,
+      remainingUah: null,
+      usedUsd: subBilling.usedUsd,
+      usedUah: usdToUah(subBilling.usedUsd),
+      source: 'usage_only',
+      updatedAt: Date.now()
+    };
   } catch (err: any) {
     if (err?.message?.includes('Невірний API ключ')) {
       throw err;
