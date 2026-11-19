@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Send, Sparkles, X, ChevronDown, Plus, Mic, ArrowLeft, ArrowDown,
+  ArrowUp, Sparkles, X, ChevronDown, Plus, Mic, MicOff, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
   Check, Square, History, Trash2, MessageSquare, Mail, Bot
 } from 'lucide-react';
@@ -118,11 +118,19 @@ export function ChatPanel({
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
 
+  // Composer focus & voice dictation state
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [micNotice, setMicNotice] = useState<string | null>(null);
+
   const mainScrollRef = useRef<HTMLElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const recognitionRef = useRef<any>(null);
+  const micNoticeTimeoutRef = useRef<number | null>(null);
 
   const activeModelObj = apiModels.find(m => m.id === selectedModel);
 
@@ -233,7 +241,17 @@ export function ChatPanel({
     }
   }, [messages.length, isOpen]);
 
-  // Clean up any running stream and animation frame on unmount
+  // Clean up any running stream, animation frame, and speech recognition on unmount or close
+  useEffect(() => {
+    if (!isOpen && recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+      setIsListening(false);
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
@@ -241,6 +259,14 @@ export function ChatPanel({
       }
       if (streamFrameIdRef.current) {
         cancelAnimationFrame(streamFrameIdRef.current);
+      }
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      if (micNoticeTimeoutRef.current) {
+        window.clearTimeout(micNoticeTimeoutRef.current);
       }
     };
   }, []);
@@ -379,7 +405,18 @@ export function ChatPanel({
     const newHistory = [...messages, newUserMessage];
     setMessages(newHistory);
     setInputValue('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setIsComposerFocused(false);
+    setIsDropdownOpen(false);
+    if (recognitionRef.current && isListening) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      setIsListening(false);
+    }
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.blur();
+    }
 
     // Persist immediately with initial prompt
     const chatTitle = currentTitle === 'Новий чат' ? userText.slice(0, 45) : currentTitle;
@@ -697,8 +734,98 @@ export function ChatPanel({
     if (file) {
       setInputValue((prev) => `${prev} [Файл: ${file.name}] `);
       setIsAddSheetOpen(false);
+      requestAnimationFrame(() => textareaRef.current?.focus());
     }
   };
+
+  const showMicNotice = (msg: string) => {
+    setMicNotice(msg);
+    if (micNoticeTimeoutRef.current) {
+      window.clearTimeout(micNoticeTimeoutRef.current);
+    }
+    micNoticeTimeoutRef.current = window.setTimeout(() => {
+      setMicNotice(null);
+    }, 2600);
+  };
+
+  const handleToggleVoice = () => {
+    if (isListening && recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionCtor) {
+      showMicNotice('Голосовий ввід не підтримується цим браузером');
+      textareaRef.current?.focus();
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionCtor();
+      recognition.lang = 'uk-UA';
+      recognition.interimResults = false;
+      recognition.continuous = false;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setMicNotice(null);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event.results || [])
+          .map((res: any) => res?.[0]?.transcript || '')
+          .join(' ')
+          .trim();
+        if (transcript) {
+          setInputValue((prev) => {
+            const next = prev.trim() ? `${prev.trimEnd()} ${transcript}` : transcript;
+            requestAnimationFrame(() => {
+              if (textareaRef.current) {
+                textareaRef.current.style.height = 'auto';
+                textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 132)}px`;
+              }
+            });
+            return next;
+          });
+          setIsComposerFocused(true);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        setIsListening(false);
+        if (event?.error === 'not-allowed' || event?.error === 'service-not-allowed') {
+          showMicNotice('Немає доступу до мікрофона');
+        } else if (event?.error !== 'aborted' && event?.error !== 'no-speech') {
+          showMicNotice('Не вдалося розпізнати голос');
+        }
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        recognitionRef.current = null;
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      showMicNotice('Голосовий ввід недоступний');
+    }
+  };
+
+  const hasInputText = inputValue.trim().length > 0;
+  const isComposerExpanded =
+    isComposerFocused ||
+    inputValue.length > 0 ||
+    isDropdownOpen ||
+    isAddSheetOpen ||
+    isListening;
 
   if (!isOpen) return null;
 
@@ -935,162 +1062,303 @@ export function ChatPanel({
         ) : null}
       </main>
 
-      {/* Signature Claude Input Box (Screenshot 4) */}
-      <footer 
-        className="p-3 sm:p-4 bg-gradient-to-t from-[#181715] via-[#181715] to-transparent shrink-0"
-        style={{ paddingBottom: 'calc(1rem + var(--safe-bottom, 0px))' }}
+      {/* Modern Animated Morphing Input Bar (Compact resting pill -> Expanded 2-row composer) */}
+      <footer
+        className="px-3 sm:px-4 pt-2 bg-gradient-to-t from-[#181715] via-[#181715]/95 to-transparent shrink-0"
+        style={{ paddingBottom: 'calc(0.9rem + var(--safe-bottom, 0px))' }}
       >
-        <div className="max-w-3xl mx-auto w-full bg-[#242320] border border-[#383632] rounded-3xl p-3 shadow-2xl transition-all focus-within:border-[#4E4B45]">
-          
-          {/* Textarea with enhanced readable size (16.5px) */}
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder={activeAgent ? `Напишіть агенту ${activeAgent.name}...` : `Reply to ${activeModelObj?.name || selectedModel || 'Claude'}...`}
-            disabled={!apiKey || !effectiveModel || isLoading}
-            className="w-full bg-transparent px-2.5 pt-1 text-[16.5px] leading-[1.5] text-[#EDE9DF] placeholder-[#7E7B74] focus:outline-none resize-none"
-            style={{ maxHeight: '120px' }}
-          />
-
-          {/* Controls Bar inside the Input Box */}
-          <div className="flex items-center justify-between mt-2 pt-1">
-            
-            <div className="flex items-center gap-2 min-w-0">
-              {/* + Action Sheet Trigger */}
-              <button
-                type="button"
-                onClick={() => setIsAddSheetOpen(true)}
-                className="w-8 h-8 rounded-full bg-[#302E2B] hover:bg-[#3B3935] text-[#EDE9DF] flex items-center justify-center transition-colors shrink-0"
-                title="Додати до чату"
-              >
-                <Plus size={18} />
-              </button>
-
-              {/* Model Selector Pill (only shown in direct model chats; agents use their built-in model) */}
-              {!activeAgent && (
-              <div className="relative" ref={dropdownRef}>
-                <button
-                  type="button"
-                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="bg-[#302E2B] hover:bg-[#3B3935] border border-[#403D38] text-[#EDE9DF] rounded-full px-3.5 py-1.5 text-[13px] font-medium flex items-center gap-1.5 transition-colors"
-                >
-                  {activeModelObj?.providerLogoUrl ? (
-                    <div 
-                      style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
-                      className="w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0 overflow-hidden"
-                    >
-                      <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
-                    </div>
-                  ) : null}
-                  <span className="truncate max-w-[130px]">
-                    {activeModelObj ? activeModelObj.name : (selectedModel || 'Оберіть модель')}
-                  </span>
-                  <ChevronDown size={13} className="text-[#9E9A92] shrink-0" />
-                </button>
-
-                {/* Model Dropdown Menu */}
-                {isDropdownOpen && (
-                  <div className="absolute bottom-full left-0 mb-2 w-72 max-h-72 overflow-y-auto bg-[#252421] border border-[#3A3834] rounded-2xl shadow-2xl p-1.5 flex flex-col gap-1 z-50 animate-in fade-in zoom-in-95 duration-150">
-                    <div className="px-3 py-1.5 text-[11px] font-semibold text-[#8A8780] uppercase tracking-wider">
-                      Доступні моделі
-                    </div>
-                    {apiModels.map(m => (
-                      <div
-                        key={m.id}
-                        onClick={() => {
-                          onChangeModel(m.id);
-                          setIsDropdownOpen(false);
-                        }}
-                        className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
-                          m.id === selectedModel 
-                            ? 'bg-[#33312D] text-white' 
-                            : 'hover:bg-[#2C2A26] text-[#EDE9DF]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 min-w-0 pr-2">
-                          {m.providerLogoUrl ? (
-                            <div 
-                              style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
-                              className="w-5 h-5 rounded-md flex items-center justify-center shrink-0 overflow-hidden shadow-2xs"
-                            >
-                              <img src={m.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
-                            </div>
-                          ) : (
-                            <span 
-                              className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10" 
-                              style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
-                            />
-                          )}
-                          <span className={`font-medium truncate ${getTierTextColor(m.tier)}`}>{m.name}</span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {m.shortPriceInfo && (
-                            <span className="text-[10px] font-medium text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
-                              {m.shortPriceInfo.replace(/\//g, '-')}
-                            </span>
-                          )}
-                          {m.id === selectedModel && <Check size={14} className="text-[#CC785C]" />}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              )}
+        <div className="max-w-3xl mx-auto w-full">
+          {micNotice && (
+            <div className="mb-2 text-center animate-in fade-in duration-150">
+              <span className="inline-block text-[11.5px] font-medium text-[#EDE9DF] bg-[#292724] border border-[#3E3B35] rounded-full px-3 py-1 shadow-md">
+                {micNotice}
+              </span>
             </div>
+          )}
 
-            {/* Right: Send, Stop or Mic Button */}
-            <div className="flex items-center gap-1 shrink-0">
-              {isLoading ? (
+          <div
+            ref={composerRef}
+            onClick={(e) => {
+              if (!(e.target as HTMLElement).closest('button')) {
+                textareaRef.current?.focus();
+              }
+            }}
+            className={`w-full border transition-[border-radius,border-color,background-color,padding,box-shadow] duration-250 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${
+              isComposerExpanded
+                ? 'rounded-[26px] bg-[#22211E] border-[#45423C] px-3.5 pt-3 pb-2.5 shadow-[0_14px_40px_rgba(0,0,0,0.55)]'
+                : 'rounded-[28px] bg-[#201F1C] border-[#33312D] px-2 py-1.5 shadow-[0_8px_28px_rgba(0,0,0,0.4)] hover:border-[#3F3D38]'
+            }`}
+          >
+            {/* Top Row: [Inline +] [Always-mounted Textarea] [Inline Mic + Send/Stop] */}
+            <div className="flex items-center">
+              {/* Inline Left '+' Button (visible only in compact resting pill) */}
+              <div
+                className={`shrink-0 overflow-hidden transition-[width,margin,opacity,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${
+                  isComposerExpanded
+                    ? 'w-0 mr-0 opacity-0 scale-75 pointer-events-none'
+                    : 'w-10 mr-2 opacity-100 scale-100'
+                }`}
+              >
                 <button
                   type="button"
-                  onClick={handleStopGenerating}
-                  className="w-9 h-9 rounded-full bg-[#2C2A26] border border-[#CC785C]/60 hover:bg-[#383530] text-[#EDE9DF] flex items-center justify-center shadow-md active:scale-95 transition-all group"
-                  title="Зупинити генерацію"
+                  tabIndex={isComposerExpanded ? -1 : 0}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => setIsAddSheetOpen(true)}
+                  className="w-10 h-10 rounded-full bg-[#2B2926] hover:bg-[#363430] text-[#ECE8E1] flex items-center justify-center transition-colors active:scale-95"
+                  title="Додати до чату"
+                  aria-label="Додати до чату"
                 >
-                  <Square size={13} className="fill-[#CC785C] text-[#CC785C] group-hover:scale-110 transition-transform" />
+                  <Plus size={19} />
                 </button>
-              ) : inputValue.trim() ? (
+              </div>
+
+              {/* Single-mount Textarea (never unmounts, preserves focus & mobile keyboard) */}
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={inputValue}
+                onFocus={() => setIsComposerFocused(true)}
+                onBlur={(e) => {
+                  const nextTarget = e.relatedTarget as Node | null;
+                  if (nextTarget && composerRef.current?.contains(nextTarget)) {
+                    return;
+                  }
+                  setIsComposerFocused(false);
+                }}
+                onChange={(e) => {
+                  setInputValue(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 132)}px`;
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  isListening
+                    ? 'Слухаю вас...'
+                    : activeAgent
+                      ? `Напишіть ${activeAgent.name}...`
+                      : 'Введіть повідомлення...'
+                }
+                disabled={!apiKey || !effectiveModel || isLoading}
+                className={`flex-1 min-w-0 bg-transparent text-[#EDE9DF] placeholder-[#8A867E] focus:outline-none resize-none transition-[padding,font-size] duration-200 motion-reduce:transition-none ${
+                  isComposerExpanded
+                    ? 'px-1 py-0.5 text-[16.5px] leading-[1.5]'
+                    : 'px-1.5 py-2 text-[15.5px] leading-[1.35]'
+                }`}
+                style={{ maxHeight: '132px' }}
+              />
+
+              {/* Inline Right Controls (visible only in compact resting pill) */}
+              <div
+                className={`shrink-0 overflow-hidden flex items-center gap-1.5 transition-[width,margin,opacity,transform] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${
+                  isComposerExpanded
+                    ? 'w-0 ml-0 opacity-0 scale-75 pointer-events-none'
+                    : 'w-[86px] ml-1.5 opacity-100 scale-100'
+                }`}
+              >
                 <button
                   type="button"
-                  onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || !apiKey || !effectiveModel}
-                  className="w-9 h-9 rounded-full bg-[#CC785C] hover:bg-[#D97757] text-white flex items-center justify-center shadow-md active:scale-95 transition-all"
-                  title="Надіслати"
+                  tabIndex={isComposerExpanded ? -1 : 0}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={handleToggleVoice}
+                  disabled={!apiKey || !effectiveModel || isLoading}
+                  className="w-10 h-10 rounded-full bg-[#2B2926] hover:bg-[#363430] text-[#B8B4AA] hover:text-[#EDE9DF] flex items-center justify-center transition-colors active:scale-95 shrink-0 disabled:opacity-40"
+                  title="Голосовий ввід"
+                  aria-label="Голосовий ввід"
                 >
-                  <Send size={16} className="translate-x-0.5 -translate-y-0.5" />
+                  <Mic size={18} />
                 </button>
-              ) : (
-                <div className="flex items-center gap-1">
+
+                {isLoading ? (
                   <button
                     type="button"
-                    className="w-9 h-9 rounded-full hover:bg-[#302E2B] text-[#9E9A92] hover:text-[#EDE9DF] flex items-center justify-center transition-colors"
-                    title="Голосовий ввід"
+                    tabIndex={isComposerExpanded ? -1 : 0}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleStopGenerating}
+                    className="w-10 h-10 rounded-full bg-[#2B2926] border border-[#CC785C]/70 hover:bg-[#383530] text-[#EDE9DF] flex items-center justify-center shadow-sm active:scale-95 transition-all shrink-0 group"
+                    title="Зупинити генерацію"
+                    aria-label="Зупинити генерацію"
                   >
-                    <Mic size={18} />
+                    <Square size={13} className="fill-[#CC785C] text-[#CC785C] group-hover:scale-110 transition-transform" />
                   </button>
-                  {/* Waveform icon button (Screenshot 4) */}
-                  <div 
-                    className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center shadow-xs cursor-pointer hover:bg-gray-100 transition-colors"
-                    title="Голосовий режим"
+                ) : (
+                  <button
+                    type="button"
+                    tabIndex={isComposerExpanded ? -1 : 0}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleSendMessage}
+                    disabled={!hasInputText || !apiKey || !effectiveModel}
+                    className={`w-10 h-10 rounded-full flex items-center justify-center transition-all shrink-0 ${
+                      hasInputText && apiKey && effectiveModel
+                        ? 'bg-[#CC785C] hover:bg-[#D97757] text-white shadow-md active:scale-95'
+                        : 'bg-[#2B2926] text-[#6E6B64] cursor-default'
+                    }`}
+                    title="Надіслати"
+                    aria-label="Надіслати"
                   >
-                    <div className="flex items-center gap-0.5 h-3.5">
-                      <span className="w-0.5 h-2 bg-black rounded-full" />
-                      <span className="w-0.5 h-3.5 bg-black rounded-full" />
-                      <span className="w-0.5 h-2.5 bg-black rounded-full" />
-                    </div>
-                  </div>
-                </div>
-              )}
+                    <ArrowUp size={18} strokeWidth={2.3} />
+                  </button>
+                )}
+              </div>
             </div>
 
+            {/* Expandable Bottom Toolbar (animated smoothly via CSS grid-rows) */}
+            <div
+              className={`grid transition-[grid-template-rows,opacity,margin] duration-250 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${
+                isComposerExpanded
+                  ? 'grid-rows-[1fr] opacity-100 mt-2.5'
+                  : 'grid-rows-[0fr] opacity-0 mt-0 pointer-events-none'
+              }`}
+            >
+              <div className={`min-h-0 ${isDropdownOpen ? 'overflow-visible' : 'overflow-hidden'}`}>
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {/* Expanded '+' Action Sheet Trigger */}
+                    <button
+                      type="button"
+                      tabIndex={isComposerExpanded ? 0 : -1}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setIsAddSheetOpen(true)}
+                      className="w-10 h-10 rounded-full bg-[#2E2C29] hover:bg-[#3A3733] text-[#ECE8E1] flex items-center justify-center transition-colors active:scale-95 shrink-0"
+                      title="Додати до чату"
+                      aria-label="Додати до чату"
+                    >
+                      <Plus size={19} />
+                    </button>
+
+                    {/* Model Selector Pill (only shown in direct model chats; agents use their built-in model) */}
+                    {!activeAgent && (
+                      <div className="relative min-w-0" ref={dropdownRef}>
+                        <button
+                          type="button"
+                          tabIndex={isComposerExpanded ? 0 : -1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                          className="h-10 bg-[#2E2C29] hover:bg-[#3A3733] border border-[#3E3B35] text-[#EDE9DF] rounded-full px-3.5 text-[13px] font-medium flex items-center gap-1.5 transition-colors max-w-full"
+                        >
+                          {activeModelObj?.providerLogoUrl ? (
+                            <div
+                              style={{ backgroundColor: resolveColorToHex(activeModelObj.providerColor) }}
+                              className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 overflow-hidden"
+                            >
+                              <img src={activeModelObj.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
+                            </div>
+                          ) : null}
+                          <span className="truncate max-w-[135px] sm:max-w-[190px]">
+                            {activeModelObj ? activeModelObj.name : (selectedModel || 'Оберіть модель')}
+                          </span>
+                          <ChevronDown
+                            size={14}
+                            className={`text-[#9E9A92] shrink-0 transition-transform duration-200 ${
+                              isDropdownOpen ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+
+                        {/* Model Dropdown Menu */}
+                        {isDropdownOpen && (
+                          <div className="absolute bottom-full left-0 mb-2 w-72 max-h-72 overflow-y-auto bg-[#252421] border border-[#3A3834] rounded-2xl shadow-2xl p-1.5 flex flex-col gap-1 z-50 animate-in fade-in zoom-in-95 duration-150">
+                            <div className="px-3 py-1.5 text-[11px] font-semibold text-[#8A8780] uppercase tracking-wider">
+                              Доступні моделі
+                            </div>
+                            {apiModels.map(m => (
+                              <div
+                                key={m.id}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  onChangeModel(m.id);
+                                  setIsDropdownOpen(false);
+                                }}
+                                className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
+                                  m.id === selectedModel
+                                    ? 'bg-[#33312D] text-white'
+                                    : 'hover:bg-[#2C2A26] text-[#EDE9DF]'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 min-w-0 pr-2">
+                                  {m.providerLogoUrl ? (
+                                    <div
+                                      style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
+                                      className="w-5 h-5 rounded-md flex items-center justify-center shrink-0 overflow-hidden shadow-2xs"
+                                    >
+                                      <img src={m.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
+                                    </div>
+                                  ) : (
+                                    <span
+                                      className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                                      style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
+                                    />
+                                  )}
+                                  <span className={`font-medium truncate ${getTierTextColor(m.tier)}`}>{m.name}</span>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {m.shortPriceInfo && (
+                                    <span className="text-[10px] font-medium text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
+                                      {m.shortPriceInfo.replace(/\//g, '-')}
+                                    </span>
+                                  )}
+                                  {m.id === selectedModel && <Check size={14} className="text-[#CC785C]" />}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Expanded Right Controls: Voice Input + Send / Stop */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      tabIndex={isComposerExpanded ? 0 : -1}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleToggleVoice}
+                      disabled={!apiKey || !effectiveModel || isLoading}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 disabled:opacity-40 ${
+                        isListening
+                          ? 'bg-rose-500/20 border border-rose-500/60 text-rose-400 animate-pulse'
+                          : 'bg-[#2E2C29] hover:bg-[#3A3733] text-[#B8B4AA] hover:text-[#EDE9DF]'
+                      }`}
+                      title={isListening ? 'Зупинити диктування' : 'Голосовий ввід'}
+                      aria-label={isListening ? 'Зупинити диктування' : 'Голосовий ввід'}
+                    >
+                      {isListening ? <MicOff size={18} /> : <Mic size={18} />}
+                    </button>
+
+                    {isLoading ? (
+                      <button
+                        type="button"
+                        tabIndex={isComposerExpanded ? 0 : -1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handleStopGenerating}
+                        className="w-10 h-10 rounded-full bg-[#2E2C29] border border-[#CC785C]/70 hover:bg-[#3A3733] text-[#EDE9DF] flex items-center justify-center shadow-md active:scale-95 transition-all group"
+                        title="Зупинити генерацію"
+                        aria-label="Зупинити генерацію"
+                      >
+                        <Square size={13} className="fill-[#CC785C] text-[#CC785C] group-hover:scale-110 transition-transform" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        tabIndex={isComposerExpanded ? 0 : -1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handleSendMessage}
+                        disabled={!hasInputText || !apiKey || !effectiveModel}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                          hasInputText && apiKey && effectiveModel
+                            ? 'bg-[#CC785C] hover:bg-[#D97757] text-white shadow-md active:scale-95'
+                            : 'bg-[#2E2C29] text-[#6E6B64] cursor-default'
+                        }`}
+                        title="Надіслати"
+                        aria-label="Надіслати"
+                      >
+                        <ArrowUp size={18} strokeWidth={2.4} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </footer>
