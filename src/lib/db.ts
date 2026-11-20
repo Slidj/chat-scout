@@ -273,11 +273,12 @@ export const logQueryEvent = async (data: {
   try {
     const now = new Date().toISOString();
     
-    // 1. Add query record
-    await addDoc(collection(db, 'queries'), {
+    // 1. Add query record & prune expired (> 31 days) / excess records
+    await addDoc(collection(db, 'queries'), sanitizeForFirestore({
       ...data,
       timestamp: now
-    });
+    }));
+    void pruneOldQueries();
 
     // 2. Add capped activity record
     const statusText = data.status === 'success' ? 'успішно' : 'помилка';
@@ -311,16 +312,76 @@ export const getUsers = async (): Promise<AppUser[]> => {
   }
 };
 
-const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
+export const QUERY_RETENTION_DAYS = 31;
+export const QUERY_RETENTION_MS = QUERY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+export const MAX_QUERY_LOG_ENTRIES = 2500;
+let activeQueryPrunePromise: Promise<void> | null = null;
+
+export const pruneOldQueries = async (
+  retentionMs = QUERY_RETENTION_MS,
+  maxEntries = MAX_QUERY_LOG_ENTRIES
+): Promise<void> => {
+  if (activeQueryPrunePromise) return activeQueryPrunePromise;
+
+  activeQueryPrunePromise = (async () => {
+    try {
+      const queriesCol = collection(db, 'queries');
+      const cutoffIso = new Date(Date.now() - retentionMs).toISOString();
+
+      // 1. Delete query records older than the 31-day monthly window
+      for (let round = 0; round < 5; round++) {
+        const expiredSnap = await getDocs(
+          query(
+            queriesCol,
+            where('timestamp', '<', cutoffIso),
+            orderBy('timestamp', 'asc'),
+            limit(400)
+          )
+        );
+        if (expiredSnap.empty) break;
+
+        const batch = writeBatch(db);
+        expiredSnap.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+        await batch.commit();
+        if (expiredSnap.size < 400) break;
+      }
+
+      // 2. Enforce safety ceiling within the monthly window
+      const countSnap = await getCountFromServer(queriesCol);
+      let excess = countSnap.data().count - maxEntries;
+      if (excess <= 0) return;
+
+      for (let round = 0; round < 5 && excess > 0; round++) {
+        const batchSize = Math.min(excess, 400);
+        const oldestSnap = await getDocs(
+          query(queriesCol, orderBy('timestamp', 'asc'), limit(batchSize))
+        );
+        if (oldestSnap.empty) break;
+
+        const batch = writeBatch(db);
+        oldestSnap.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+        await batch.commit();
+        excess -= oldestSnap.size;
+      }
+    } catch (err) {
+      console.warn('Query pruning skipped:', err);
+    } finally {
+      activeQueryPrunePromise = null;
+    }
+  })();
+
+  return activeQueryPrunePromise;
+};
 
 export const getQueries = async (): Promise<QueryLog[]> => {
   try {
-    const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+    void pruneOldQueries();
+    const cutoffIso = new Date(Date.now() - QUERY_RETENTION_MS).toISOString();
     const q = query(
       collection(db, 'queries'),
       where('timestamp', '>=', cutoffIso),
       orderBy('timestamp', 'desc'),
-      limit(2500)
+      limit(MAX_QUERY_LOG_ENTRIES)
     );
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QueryLog));
@@ -418,12 +479,12 @@ export const subscribeToUsers = (callback: (users: AppUser[]) => void): Unsubscr
 };
 
 export const subscribeToQueries = (callback: (queries: QueryLog[]) => void): Unsubscribe => {
-  const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+  const cutoffIso = new Date(Date.now() - QUERY_RETENTION_MS).toISOString();
   const q = query(
     collection(db, 'queries'),
     where('timestamp', '>=', cutoffIso),
     orderBy('timestamp', 'desc'),
-    limit(2500)
+    limit(MAX_QUERY_LOG_ENTRIES)
   );
   return onSnapshot(q, (snapshot) => {
     const queries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QueryLog));

@@ -327,11 +327,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     });
   }, [users, liveNow]);
 
-  // Total query count
+  // Total query count (active monthly retention window)
   const totalQueriesCount = useMemo(() => {
-    if (queries.length > 0) return queries.length;
-    return users.reduce((acc, u) => acc + (u.totalQueries || 0), 0);
-  }, [queries, users]);
+    return queries.length;
+  }, [queries]);
 
   // Average response time (real data only)
   const averageResponseTimeMs = useMemo<number | null>(() => {
@@ -1030,7 +1029,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                 >
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold text-[#8E8B83] group-hover:text-[#ECE8E1] transition-colors flex items-center gap-1">
-                      <span>Запити до ШІ</span>
+                      <span>Запити за місяць</span>
                       <ArrowUpRight size={13} className="text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                     </span>
                     <div className="p-2 rounded-xl bg-[#262432] text-indigo-400 group-hover:bg-indigo-500 group-hover:text-white transition-colors">
@@ -3645,22 +3644,28 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
               {/* MODAL 3: QUERIES DETAIL */}
               {drillModal === 'queries_detail' && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-3 gap-2 tabular-nums">
                     <div className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-xl text-center">
-                      <div className="text-[10px] text-[#8E8B83]">Всього запитів</div>
+                      <div className="text-[10px] text-[#8E8B83]">За місяць (31д)</div>
                       <div className="text-base font-bold text-[#ECE8E1]">{totalQueriesCount}</div>
                     </div>
                     <div className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-xl text-center">
                       <div className="text-[10px] text-[#8E8B83]">Середня швидкість</div>
-                      <div className="text-base font-bold text-emerald-400">~{(averageResponseTimeMs / 1000).toFixed(1)}с</div>
+                      <div className="text-base font-bold text-emerald-400">
+                        {averageResponseTimeMs !== null ? `~${(averageResponseTimeMs / 1000).toFixed(1)}с` : '—'}
+                      </div>
                     </div>
                     <div className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-xl text-center">
                       <div className="text-[10px] text-[#8E8B83]">Успішність</div>
-                      <div className="text-base font-bold text-indigo-400">{successRatePct}%</div>
+                      <div className="text-base font-bold text-indigo-400">
+                        {successRatePct !== null ? `${successRatePct}%` : '—'}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="text-xs font-semibold text-[#8E8B83] mt-2">Останні запити в реальному часі:</div>
+                  <div className="text-xs font-semibold text-[#8E8B83] mt-2">
+                    Останні запити (записи старші 31 дня видаляються автоматично):
+                  </div>
 
                   <div className="space-y-2">
                     {queries.slice(0, 15).map((q, idx) => (
