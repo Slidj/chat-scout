@@ -10,6 +10,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { TopupModal } from './components/TopupModal';
 import { CouponCardModal } from './components/CouponCardModal';
 import { AppPreloader } from './components/AppPreloader';
+import { ModelDetailsSheet } from './components/ModelDetailsSheet';
 import { Provider, AiModel, Agent } from './types';
 import { fetchModels, fetchApiBalance, ApiBalanceInfo, Model } from './lib/api';
 import { 
@@ -59,7 +60,7 @@ export default function App() {
 
   // Search & Navigation State
   const [searchQuery, setSearchQuery] = useState('');
-  const [currentView, setCurrentView] = useState<'home' | 'provider' | 'model'>('home');
+  const [currentView, setCurrentView] = useState<'home' | 'provider'>('home');
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [selectedModelDetails, setSelectedModelDetails] = useState<AiModel | null>(null);
   const [activeTab, setActiveTab] = useState<'providers' | 'models' | 'agents'>('providers');
@@ -295,7 +296,6 @@ export default function App() {
 
   const openModelDetails = (model: AiModel) => {
     setSelectedModelDetails(model);
-    setCurrentView('model');
   };
 
   const activateModelForChat = (apiModelId: string) => {
@@ -305,6 +305,7 @@ export default function App() {
       setIsSettingsOpen(true);
       return;
     }
+    setSelectedModelDetails(null);
     setActiveAgent(null);
     setActiveChatId(null);
     setActiveChatModelId(apiModelId);
@@ -431,10 +432,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           {currentView !== 'home' ? (
             <button 
-              onClick={() => {
-                if (currentView === 'model') setCurrentView('provider');
-                else goHome();
-              }}
+              onClick={goHome}
               className="p-2 -ml-2 rounded-full hover:bg-[#252421] text-[#ECE8E1] transition-colors"
             >
               <ChevronLeft size={24} />
@@ -452,7 +450,6 @@ export default function App() {
           <h1 className="font-semibold text-base text-[#ECE8E1] tracking-tight">
             {currentView === 'home' && (searchQuery ? 'Пошук' : 'Chats')}
             {currentView === 'provider' && selectedProvider?.name}
-            {currentView === 'model' && selectedModelDetails?.name}
           </h1>
         </div>
 
@@ -832,71 +829,36 @@ export default function App() {
           </div>
         )}
 
-        {/* MODEL DETAILS VIEW */}
-        {currentView === 'model' && selectedModelDetails && (() => {
-          const prov = providers.find(p => p.id === selectedModelDetails.providerId);
-          const hexColor = resolveColorToHex(prov?.color || '#CC785C');
-          return (
-            <div className="animate-in fade-in duration-200">
-              <div className="bg-[#242320] rounded-3xl p-6 sm:p-8 border border-[#363430] shadow-md text-center max-w-md mx-auto">
-                <div 
-                  style={{ backgroundColor: hexColor }}
-                  className="w-20 h-20 mx-auto rounded-3xl text-white flex items-center justify-center font-bold text-3xl shadow-md mb-5 overflow-hidden relative"
-                >
-                  {prov?.logoUrl ? (
-                    <img src={prov.logoUrl} alt={prov.name} className="w-full h-full object-contain p-3 drop-shadow-sm" />
-                  ) : (
-                    <span>{prov?.name.charAt(0).toUpperCase() || 'M'}</span>
-                  )}
-                </div>
-                <h2 className="text-2xl font-bold text-[#ECE8E1] mb-2">{selectedModelDetails.name}</h2>
-                <p className="text-xs text-[#9E9A92] mb-6 leading-relaxed">{selectedModelDetails.description}</p>
-                
-                <div className="bg-[#1C1B18] border border-[#33312D] rounded-2xl p-4 mb-6 text-left space-y-3">
-                  <div className="flex justify-between items-center py-1 border-b border-[#2C2A26]">
-                    <span className="text-xs text-[#8A8780]">Постачальник</span>
-                    <span className="text-xs font-medium text-[#ECE8E1] flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: hexColor }} />
-                      {prov?.name || 'Невідомий'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center py-1 border-b border-[#2C2A26]">
-                    <span className="text-xs text-[#8A8780]">Вартість</span>
-                    <span className="text-xs font-medium text-[#ECE8E1]">{selectedModelDetails.priceInfo}</span>
-                  </div>
-                  <div className="flex justify-between items-center py-1">
-                    <span className="text-xs text-[#8A8780]">API ID</span>
-                    <span className="text-[11px] font-mono bg-[#282724] px-2 py-0.5 rounded text-[#CC785C]">{selectedModelDetails.apiModelId}</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => activateModelForChat(selectedModelDetails.apiModelId)}
-                  className="w-full py-3.5 bg-[#CC785C] hover:bg-[#D97757] text-white font-medium rounded-xl shadow-md transition-all flex justify-center items-center gap-2 active:scale-98 text-sm"
-                >
-                  <MessageSquare size={18} />
-                  Почати чат з цією моделлю
-                </button>
-              </div>
-            </div>
-          );
-        })()}
       </main>
 
-      {/* Claude Signature Floating "+ New chat" Pill (Screenshot 1 & Screenshot 2) */}
-      <div 
-        className="fixed bottom-6 right-4 sm:right-6 z-30"
-        style={{ marginBottom: 'var(--safe-bottom, 0px)' }}
-      >
-        <button
-          onClick={handleStartNewChat}
-          className="bg-[#FAF8F5] hover:bg-white text-black font-semibold text-sm px-5 py-3 rounded-full shadow-2xl flex items-center gap-2 active:scale-95 transition-all"
-          title="Новий чат"
+      {/* Slide-Up Model Details Sheet */}
+      <ModelDetailsSheet
+        model={selectedModelDetails}
+        provider={
+          selectedModelDetails
+            ? providers.find(p => p.id === selectedModelDetails.providerId) || null
+            : null
+        }
+        onClose={() => setSelectedModelDetails(null)}
+        onStartChat={activateModelForChat}
+      />
+
+      {/* Claude Signature Floating "+ New chat" Pill (hidden while ModelDetailsSheet is open) */}
+      {!selectedModelDetails && (
+        <div 
+          className="fixed bottom-6 right-4 sm:right-6 z-30"
+          style={{ marginBottom: 'var(--safe-bottom, 0px)' }}
         >
-          <Plus size={18} className="text-black" />
-          <span>New chat</span>
-        </button>
-      </div>
+          <button
+            onClick={handleStartNewChat}
+            className="bg-[#FAF8F5] hover:bg-white text-black font-semibold text-sm px-5 py-3 rounded-full shadow-2xl flex items-center gap-2 active:scale-95 transition-all"
+            title="Новий чат"
+          >
+            <Plus size={18} className="text-black" />
+            <span>New chat</span>
+          </button>
+        </div>
+      )}
 
       {/* Claude Left Navigation Drawer (Screenshot 1 & Smooth Slide Transition) */}
       <div 
