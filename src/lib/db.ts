@@ -1,6 +1,7 @@
 import { 
   collection, getDocs, getDoc, doc, setDoc, deleteDoc, addDoc, 
-  onSnapshot, query, orderBy, limit, increment, Unsubscribe, where 
+  onSnapshot, query, orderBy, limit, increment, Unsubscribe, where,
+  writeBatch, getCountFromServer
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { Provider, AiModel, Agent } from '../types';
@@ -196,8 +197,8 @@ export const trackUserSession = async (user?: any): Promise<boolean> => {
       ...payload
     }, { merge: true });
 
-    // Also log user session event
-    await addDoc(collection(db, 'activity'), {
+    // Also log user session event (capped at MAX_ACTIVITY_LOG_ENTRIES)
+    await writeCappedActivityEvent({
       type: 'visit',
       description: `Активна сесія: ${isTg ? (user.first_name || user.username || user.id) : 'Web відвідувач'}`,
       user: isTg ? (user.first_name || `@${user.username}`) : 'Web User',
@@ -215,7 +216,7 @@ export const trackUserSession = async (user?: any): Promise<boolean> => {
 export const deleteUser = async (userId: string) => {
   try {
     await deleteDoc(doc(db, 'users', userId));
-    await addDoc(collection(db, 'activity'), {
+    await writeCappedActivityEvent({
       type: 'admin_action',
       description: `Видалено користувача ID: ${userId}`,
       timestamp: new Date().toISOString()
@@ -236,7 +237,7 @@ export const toggleBlockUser = async (userId: string, isBlocked: boolean, reason
       blockedReason: isBlocked ? (reason || 'Обмеження доступу за рішенням адміністрації') : null
     }, { merge: true });
 
-    await addDoc(collection(db, 'activity'), {
+    await writeCappedActivityEvent({
       type: 'admin_action',
       description: isBlocked ? `Заблоковано користувача ${userId}` : `Розблоковано користувача ${userId}`,
       timestamp: now
@@ -278,9 +279,9 @@ export const logQueryEvent = async (data: {
       timestamp: now
     });
 
-    // 2. Add activity record
+    // 2. Add capped activity record
     const statusText = data.status === 'success' ? 'успішно' : 'помилка';
-    await addDoc(collection(db, 'activity'), {
+    await writeCappedActivityEvent({
       type: 'query',
       description: `Запит до ${data.modelId} (${statusText}, ${data.durationMs}мс)`,
       user: data.userName || 'Користувач',
@@ -329,12 +330,60 @@ export const getQueries = async (): Promise<QueryLog[]> => {
   }
 };
 
+export const MAX_ACTIVITY_LOG_ENTRIES = 30;
+let activePrunePromise: Promise<void> | null = null;
+
+export const pruneOldActivities = async (maxEntries = MAX_ACTIVITY_LOG_ENTRIES): Promise<void> => {
+  if (activePrunePromise) return activePrunePromise;
+
+  activePrunePromise = (async () => {
+    try {
+      const activityCol = collection(db, 'activity');
+      const countSnap = await getCountFromServer(activityCol);
+      let excess = countSnap.data().count - maxEntries;
+      if (excess <= 0) return;
+
+      for (let round = 0; round < 5 && excess > 0; round++) {
+        const batchSize = Math.min(excess, 400);
+        let oldestSnap = await getDocs(
+          query(activityCol, orderBy('timestamp', 'asc'), limit(batchSize))
+        );
+
+        // Fallback if legacy documents are missing timestamp field
+        if (oldestSnap.empty) {
+          oldestSnap = await getDocs(query(activityCol, limit(batchSize)));
+        }
+        if (oldestSnap.empty) break;
+
+        const batch = writeBatch(db);
+        oldestSnap.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+        await batch.commit();
+        excess -= oldestSnap.size;
+      }
+    } catch (err) {
+      console.warn('Activity pruning skipped:', err);
+    } finally {
+      activePrunePromise = null;
+    }
+  })();
+
+  return activePrunePromise;
+};
+
+const writeCappedActivityEvent = async (
+  event: Omit<ActivityEvent, 'id' | 'timestamp'> & { timestamp?: string }
+) => {
+  const payload = sanitizeForFirestore({
+    ...event,
+    timestamp: event.timestamp || new Date().toISOString()
+  });
+  await addDoc(collection(db, 'activity'), payload);
+  void pruneOldActivities(MAX_ACTIVITY_LOG_ENTRIES);
+};
+
 export const logActivityEvent = async (event: Omit<ActivityEvent, 'id' | 'timestamp'>) => {
   try {
-    await addDoc(collection(db, 'activity'), {
-      ...event,
-      timestamp: new Date().toISOString()
-    });
+    await writeCappedActivityEvent(event);
   } catch (err) {
     console.warn('Activity logging skipped:', err);
   }
@@ -342,12 +391,11 @@ export const logActivityEvent = async (event: Omit<ActivityEvent, 'id' | 'timest
 
 export const getRecentActivities = async (): Promise<ActivityEvent[]> => {
   try {
-    const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+    void pruneOldActivities(MAX_ACTIVITY_LOG_ENTRIES);
     const q = query(
       collection(db, 'activity'),
-      where('timestamp', '>=', cutoffIso),
       orderBy('timestamp', 'desc'),
-      limit(1500)
+      limit(MAX_ACTIVITY_LOG_ENTRIES)
     );
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityEvent));
@@ -386,12 +434,10 @@ export const subscribeToQueries = (callback: (queries: QueryLog[]) => void): Uns
 };
 
 export const subscribeToActivities = (callback: (events: ActivityEvent[]) => void): Unsubscribe => {
-  const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
   const q = query(
     collection(db, 'activity'),
-    where('timestamp', '>=', cutoffIso),
     orderBy('timestamp', 'desc'),
-    limit(1500)
+    limit(MAX_ACTIVITY_LOG_ENTRIES)
   );
   return onSnapshot(q, (snapshot) => {
     const events = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityEvent));

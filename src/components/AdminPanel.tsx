@@ -8,7 +8,8 @@ import {
   TopupRequest, subscribeToTopups, updateTopupStatus, sendCouponToUser,
   subscribePaymentSettings, updatePaymentSettings, PaymentSettings, DEFAULT_PAYMENT_SETTINGS,
   subscribePreloaderSettings, updatePreloaderSettings, PreloaderSettings, DEFAULT_PRELOADER_SETTINGS,
-  subscribeToAgents, saveAgent, updateAgent, deleteAgent, DEFAULT_AGENT_SEARCH_URL
+  subscribeToAgents, saveAgent, updateAgent, deleteAgent, DEFAULT_AGENT_SEARCH_URL,
+  MAX_ACTIVITY_LOG_ENTRIES
 } from '../lib/db';
 import { fetchModels, resolveMediaLink } from '../lib/api';
 import { buildActivityChartData, ChartBucket, ChartTimeframe } from '../lib/analytics';
@@ -1522,11 +1523,11 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       </span>
                     </div>
 
-                    <div className="space-y-2.5">
+                    <div className="space-y-2.5 max-h-[330px] overflow-y-auto pr-1">
                       {activities.length > 0 ? (
-                        activities.slice(0, 5).map((act, i) => (
+                        activities.slice(0, MAX_ACTIVITY_LOG_ENTRIES).map((act, i) => (
                           <div 
-                            key={i} 
+                            key={act.id || i} 
                             className="flex items-start gap-3 p-2.5 rounded-xl bg-[#1B1A17] border border-[#2E2C28] text-xs hover:border-[#3D3A34] transition-colors"
                           >
                             <div className="p-1.5 rounded-lg bg-[#2B2925] text-[#CC785C] shrink-0 mt-0.5">
@@ -1537,7 +1538,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                               <div className="text-[10px] text-[#7E7B74] mt-0.5 flex items-center gap-2">
                                 <span className="text-[#A09D95] font-semibold">{act.user || 'Користувач'}</span>
                                 <span>•</span>
-                                <span>{new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                                <span className="tabular-nums">{new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                               </div>
                             </div>
                           </div>
@@ -1552,8 +1553,8 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
                   <div className="mt-4 pt-3 border-t border-[#302E2A] flex justify-between items-center text-xs">
                     <span className="text-[#8E8B83]">Всього записів у лозі:</span>
-                    <span className="text-emerald-400 font-semibold font-mono">
-                      {activities.length} подій
+                    <span className="text-emerald-400 font-semibold font-mono tabular-nums">
+                      {Math.min(activities.length, MAX_ACTIVITY_LOG_ENTRIES)} / {MAX_ACTIVITY_LOG_ENTRIES} подій
                     </span>
                   </div>
                 </div>
