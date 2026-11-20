@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
-  Plus, Layers, Cpu, Code2, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
-  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe, FileText, RefreshCw
+  Plus, Layers, Cpu, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
+  Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe, FileText, RefreshCw,
+  Home, ChevronRight
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
@@ -448,7 +449,7 @@ export default function App() {
           )}
 
           <h1 className="font-semibold text-base text-[#ECE8E1] tracking-tight">
-            {currentView === 'home' && (searchQuery ? 'Пошук' : 'Chats')}
+            {currentView === 'home' && (searchQuery ? 'Пошук' : 'Головна')}
             {currentView === 'provider' && selectedProvider?.name}
           </h1>
         </div>
@@ -882,37 +883,34 @@ export default function App() {
           onClick={(e) => e.stopPropagation()}
           style={{ paddingTop: 'calc(2.5rem + var(--safe-top, 0px))', paddingBottom: 'calc(1.5rem + var(--safe-bottom, 0px))' }}
         >
-            {/* Wordmark (Screenshot 1) */}
-            <div className="flex items-center justify-between mb-8 px-1">
-              <h1 className="font-claude-serif text-3xl font-normal text-[#ECE8E1] tracking-tight">
-                Claude
-              </h1>
+            {/* Brand Wordmark */}
+            <div className="flex items-center justify-between mb-6 px-1">
+              <div className="flex items-baseline gap-2">
+                <h1 className="font-claude-serif text-3xl font-normal text-[#FAF8F5] tracking-tight leading-none">
+                  Scout
+                </h1>
+              </div>
               <button 
                 onClick={() => setIsDrawerOpen(false)}
-                className="p-1 rounded-full text-[#8A8780] hover:text-white"
+                className="p-2 -mr-1 rounded-full text-[#8A8780] hover:text-white hover:bg-[#242320] transition-colors"
+                aria-label="Закрити меню"
               >
                 <X size={20} />
               </button>
             </div>
 
-            {/* Main Menu Links (Screenshot 1) */}
-            <div className="space-y-1">
+            {/* Main Menu Links */}
+            <div className="space-y-1.5">
               <div 
                 onClick={() => { goHome(); setActiveTab('providers'); setIsDrawerOpen(false); }}
                 className={`flex items-center gap-3 px-3.5 py-2.5 rounded-2xl cursor-pointer transition-colors text-sm font-medium ${
-                  currentView === 'home' && !isChatOpen ? 'bg-[#2E2C29] text-[#ECE8E1]' : 'text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]'
+                  currentView === 'home' && activeTab !== 'agents' && !isChatOpen
+                    ? 'bg-[#2E2C29] text-[#ECE8E1]'
+                    : 'text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]'
                 }`}
               >
-                <MessageSquare size={18} />
-                <span>Chats</span>
-              </div>
-
-              <div 
-                onClick={() => { goHome(); setActiveTab('models'); setIsDrawerOpen(false); }}
-                className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl cursor-pointer transition-colors text-sm font-medium text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]"
-              >
-                <Cpu size={18} />
-                <span>Projects</span>
+                <Home size={18} />
+                <span>Головна</span>
               </div>
 
               <div 
@@ -928,18 +926,10 @@ export default function App() {
                   <span>Агенти</span>
                 </div>
                 {agents.length > 0 && (
-                  <span className="text-[10px] font-mono text-[#8A8780] bg-[#22201D] px-2 py-0.5 rounded-full border border-[#34322E]">
+                  <span className="text-[10px] font-mono text-[#8A8780] bg-[#22201D] px-2 py-0.5 rounded-full border border-[#34322E] tabular-nums">
                     {agents.length}
                   </span>
                 )}
-              </div>
-
-              <div 
-                onClick={() => { handleStartNewChat(); setIsDrawerOpen(false); }}
-                className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl cursor-pointer transition-colors text-sm font-medium text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]"
-              >
-                <Code2 size={18} />
-                <span>Code</span>
               </div>
 
               {/* Top-up Balance Item */}
@@ -975,32 +965,38 @@ export default function App() {
                       +{unreadCouponsCount} нові
                     </span>
                   ) : (
-                    <span className="text-[10px] font-medium text-[#8A8780] bg-[#252421] px-2 py-0.5 rounded-full">
+                    <span className="text-[10px] font-medium text-[#8A8780] bg-[#252421] px-2 py-0.5 rounded-full tabular-nums">
                       {userCoupons.length}
                     </span>
                   )}
                 </div>
               )}
 
+              {/* Admin-only Distinguished Panel Entry */}
               {isAdmin && (
                 <div 
                   onClick={() => { setIsAdminOpen(true); setIsDrawerOpen(false); }}
-                  className="flex items-center gap-3 px-3.5 py-2.5 rounded-2xl cursor-pointer transition-colors text-sm font-medium text-[#8A8780] hover:text-[#ECE8E1] hover:bg-[#242320]"
+                  className="flex items-center justify-between px-3.5 py-2.5 rounded-2xl cursor-pointer transition-all text-sm font-semibold text-[#FAF8F5] bg-gradient-to-r from-[#2D211B] to-[#231E1B] hover:from-[#38271F] hover:to-[#2B231F] border border-[#CC785C]/45 hover:border-[#CC785C] shadow-xs group mt-1"
                 >
-                  <Shield size={18} />
-                  <span>Artifacts / Admin</span>
+                  <div className="flex items-center gap-3">
+                    <div className="w-6 h-6 rounded-lg bg-[#CC785C]/20 border border-[#CC785C]/40 text-[#E59275] flex items-center justify-center">
+                      <Shield size={14} />
+                    </div>
+                    <span>Адмін панель</span>
+                  </div>
+                  <ChevronRight size={15} className="text-[#CC785C] group-hover:translate-x-0.5 transition-transform" />
                 </div>
               )}
             </div>
 
-            {/* Recents Section - Real User Chat History (Screenshot 2) */}
-            <div className="mt-6 flex-1 overflow-y-auto pr-1 min-h-[160px]">
-              <div className="flex items-center justify-between px-3.5 mb-2">
+            {/* Recents Section - Real User Chat History */}
+            <div className="mt-5 pt-4 border-t border-[#2C2B27] flex-1 overflow-y-auto pr-1 min-h-[160px]">
+              <div className="flex items-center justify-between px-3.5 mb-2.5">
                 <span className="text-xs font-semibold text-[#76736C] uppercase tracking-wider">
-                  Recents
+                  Нещодавні
                 </span>
                 {userChats.length > 0 && (
-                  <span className="text-[10px] font-mono text-[#8A8780] bg-[#22201D] px-2 py-0.5 rounded-full border border-[#34322E]">
+                  <span className="text-[10px] font-mono text-[#8A8780] bg-[#22201D] px-2 py-0.5 rounded-full border border-[#34322E] tabular-nums">
                     {userChats.length}
                   </span>
                 )}

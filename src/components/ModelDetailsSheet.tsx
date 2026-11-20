@@ -266,7 +266,7 @@ export function ModelDetailsSheet({
 
                 <div className="bg-[#171614] border border-[#2C2A26] rounded-2xl p-3.5 sm:p-4">
                   <div className="text-xs text-[#8E8B83]">Вихідні токени</div>
-                  <div className="text-lg sm:text-xl font-bold text-[#CC785C] tabular-nums mt-1 tracking-tight">
+                  <div className="text-lg sm:text-xl font-bold text-[#FAF8F5] tabular-nums mt-1 tracking-tight">
                     {pricing.outputPrice}
                   </div>
                   {pricing.unitLabel && (
