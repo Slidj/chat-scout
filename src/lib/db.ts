@@ -139,6 +139,7 @@ export interface ActivityEvent {
   description: string;
   timestamp: string;
   user?: string;
+  userId?: string;
   details?: any;
 }
 
@@ -200,6 +201,7 @@ export const trackUserSession = async (user?: any): Promise<boolean> => {
       type: 'visit',
       description: `Активна сесія: ${isTg ? (user.first_name || user.username || user.id) : 'Web відвідувач'}`,
       user: isTg ? (user.first_name || `@${user.username}`) : 'Web User',
+      userId,
       timestamp: now
     });
 
@@ -282,6 +284,7 @@ export const logQueryEvent = async (data: {
       type: 'query',
       description: `Запит до ${data.modelId} (${statusText}, ${data.durationMs}мс)`,
       user: data.userName || 'Користувач',
+      userId: data.userId,
       timestamp: now
     });
 
@@ -307,9 +310,17 @@ export const getUsers = async (): Promise<AppUser[]> => {
   }
 };
 
+const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
+
 export const getQueries = async (): Promise<QueryLog[]> => {
   try {
-    const q = query(collection(db, 'queries'), orderBy('timestamp', 'desc'), limit(150));
+    const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+    const q = query(
+      collection(db, 'queries'),
+      where('timestamp', '>=', cutoffIso),
+      orderBy('timestamp', 'desc'),
+      limit(2500)
+    );
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QueryLog));
   } catch (e) {
@@ -331,7 +342,13 @@ export const logActivityEvent = async (event: Omit<ActivityEvent, 'id' | 'timest
 
 export const getRecentActivities = async (): Promise<ActivityEvent[]> => {
   try {
-    const q = query(collection(db, 'activity'), orderBy('timestamp', 'desc'), limit(40));
+    const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+    const q = query(
+      collection(db, 'activity'),
+      where('timestamp', '>=', cutoffIso),
+      orderBy('timestamp', 'desc'),
+      limit(1500)
+    );
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityEvent));
   } catch (e) {
@@ -353,7 +370,13 @@ export const subscribeToUsers = (callback: (users: AppUser[]) => void): Unsubscr
 };
 
 export const subscribeToQueries = (callback: (queries: QueryLog[]) => void): Unsubscribe => {
-  const q = query(collection(db, 'queries'), orderBy('timestamp', 'desc'), limit(150));
+  const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+  const q = query(
+    collection(db, 'queries'),
+    where('timestamp', '>=', cutoffIso),
+    orderBy('timestamp', 'desc'),
+    limit(2500)
+  );
   return onSnapshot(q, (snapshot) => {
     const queries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QueryLog));
     callback(queries);
@@ -363,7 +386,13 @@ export const subscribeToQueries = (callback: (queries: QueryLog[]) => void): Uns
 };
 
 export const subscribeToActivities = (callback: (events: ActivityEvent[]) => void): Unsubscribe => {
-  const q = query(collection(db, 'activity'), orderBy('timestamp', 'desc'), limit(40));
+  const cutoffIso = new Date(Date.now() - THIRTY_ONE_DAYS_MS).toISOString();
+  const q = query(
+    collection(db, 'activity'),
+    where('timestamp', '>=', cutoffIso),
+    orderBy('timestamp', 'desc'),
+    limit(1500)
+  );
   return onSnapshot(q, (snapshot) => {
     const events = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ActivityEvent));
     callback(events);

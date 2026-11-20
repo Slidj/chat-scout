@@ -11,6 +11,7 @@ import {
   subscribeToAgents, saveAgent, updateAgent, deleteAgent, DEFAULT_AGENT_SEARCH_URL
 } from '../lib/db';
 import { fetchModels, resolveMediaLink } from '../lib/api';
+import { buildActivityChartData, ChartBucket, ChartTimeframe } from '../lib/analytics';
 import { Provider, AiModel, Agent } from '../types';
 import { AppPreloader } from './AppPreloader';
 import { 
@@ -94,7 +95,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
   // Drill-down Modal State (Clickable Cards & Stats)
   const [drillModal, setDrillModal] = useState<DrillDownModal>(null);
-  const [selectedChartPoint, setSelectedChartPoint] = useState<{ label: string; users: number; queries: number } | null>(null);
+  const [selectedChartPoint, setSelectedChartPoint] = useState<ChartBucket | null>(null);
   const [selectedProviderDetail, setSelectedProviderDetail] = useState<Provider | null>(null);
 
   // Form Modals State
@@ -110,9 +111,11 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [keyStatusMessage, setKeyStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Chart Timeframe: '24h' | '7d' | '30d'
-  const [chartTimeframe, setChartTimeframe] = useState<'24h' | '7d' | '30d'>('24h');
-  const [hoveredPoint, setHoveredPoint] = useState<{ x: number; y: number; label: string; users: number; queries: number } | null>(null);
+  // Chart Timeframe, Metric Filter & Live Clock
+  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('24h');
+  const [chartMetricFilter, setChartMetricFilter] = useState<'both' | 'queries' | 'users'>('both');
+  const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null);
+  const [liveNow, setLiveNow] = useState<number>(() => Date.now());
 
   // Search & Filters within views
   const [providerSearch, setProviderSearch] = useState('');
@@ -152,10 +155,19 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
     loadInitialStaticData();
 
-    // Subscribe to live Firestore updates
-    const unsubUsers = subscribeToUsers((liveUsers) => setUsers(liveUsers));
-    const unsubQueries = subscribeToQueries((liveQueries) => setQueries(liveQueries));
-    const unsubActivities = subscribeToActivities((liveActs) => setActivities(liveActs));
+    // Subscribe to live Firestore updates and advance clock
+    const unsubUsers = subscribeToUsers((liveUsers) => {
+      setUsers(liveUsers);
+      setLiveNow(Date.now());
+    });
+    const unsubQueries = subscribeToQueries((liveQueries) => {
+      setQueries(liveQueries);
+      setLiveNow(Date.now());
+    });
+    const unsubActivities = subscribeToActivities((liveActs) => {
+      setActivities(liveActs);
+      setLiveNow(Date.now());
+    });
     const unsubTopups = subscribeToTopups((liveTopups) => setTopups(liveTopups));
     const unsubAgents = subscribeToAgents((liveAgents) => setAgents(liveAgents));
     const unsubPayment = subscribePaymentSettings((settings) => {
@@ -179,7 +191,12 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       setPreloaderSecondaryText(settings.secondaryText || 'Завантаження застосунку...');
     });
 
+    const clockInterval = window.setInterval(() => {
+      setLiveNow(Date.now());
+    }, 30000);
+
     return () => {
+      window.clearInterval(clockInterval);
       unsubUsers();
       unsubQueries();
       unsubActivities();
@@ -202,9 +219,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       ]);
       setProviders(p);
       setModels(m);
-      if (u.length > 0) setUsers(u);
-      if (q.length > 0) setQueries(q);
-      if (a.length > 0) setActivities(a);
+      setUsers(u);
+      setQueries(q);
+      setActivities(a);
+      setLiveNow(Date.now());
     } catch (e) {
       console.error('Error loading static admin data:', e);
     } finally {
@@ -287,7 +305,6 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   // -------------------------------------------------------------
   // Dynamic Real Metrics Calculations
   // -------------------------------------------------------------
-  const now = Date.now();
   const oneDayMs = 24 * 60 * 60 * 1000;
   const fifteenMinMs = 15 * 60 * 1000;
 
@@ -296,18 +313,18 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     return users.filter(u => {
       if (!u.lastActive) return false;
       const t = new Date(u.lastActive).getTime();
-      return now - t <= oneDayMs;
+      return Number.isFinite(t) && liveNow - t <= oneDayMs;
     });
-  }, [users, now]);
+  }, [users, liveNow]);
 
   // Online right now (last 15 minutes)
   const onlineNowUsers = useMemo(() => {
     return users.filter(u => {
       if (!u.lastActive) return false;
       const t = new Date(u.lastActive).getTime();
-      return now - t <= fifteenMinMs;
+      return Number.isFinite(t) && liveNow - t <= fifteenMinMs;
     });
-  }, [users, now]);
+  }, [users, liveNow]);
 
   // Total query count
   const totalQueriesCount = useMemo(() => {
@@ -315,150 +332,110 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     return users.reduce((acc, u) => acc + (u.totalQueries || 0), 0);
   }, [queries, users]);
 
-  // Average response time
-  const averageResponseTimeMs = useMemo(() => {
-    if (queries.length === 0) return 2100;
+  // Average response time (real data only)
+  const averageResponseTimeMs = useMemo<number | null>(() => {
+    if (queries.length === 0) return null;
     const total = queries.reduce((acc, q) => acc + (q.durationMs || 0), 0);
     return Math.round(total / queries.length);
   }, [queries]);
 
-  // Success rate
-  const successRatePct = useMemo(() => {
-    if (queries.length === 0) return 98.6;
+  // Success rate (real data only)
+  const successRatePct = useMemo<number | null>(() => {
+    if (queries.length === 0) return null;
     const successful = queries.filter(q => q.status === 'success').length;
     return Math.round((successful / queries.length) * 1000) / 10;
   }, [queries]);
 
   // -------------------------------------------------------------
-  // Real Chart Data Aggregation
+  // Real Chart Data Aggregation (Rolling 24h / 7d / 30d)
   // -------------------------------------------------------------
   const chartData = useMemo(() => {
-    if (chartTimeframe === '24h') {
-      const hours = ['00:00', '02:00', '04:00', '06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'];
-      const realUserCounts = hours.map(() => 0);
-      const realQueryCounts = hours.map(() => 0);
+    return buildActivityChartData(chartTimeframe, queries, users, activities, liveNow);
+  }, [chartTimeframe, queries, users, activities, liveNow]);
 
-      queries.forEach(q => {
-        const d = new Date(q.timestamp);
-        if (now - d.getTime() <= oneDayMs) {
-          const h = d.getHours();
-          const bucket = Math.min(Math.floor(h / 2), hours.length - 1);
-          realQueryCounts[bucket] += 1;
-        }
-      });
+  // Reset hovered index when switching timeframe
+  useEffect(() => {
+    setHoveredChartIndex(null);
+  }, [chartTimeframe]);
 
-      users.forEach(u => {
-        if (!u.lastActive) return;
-        const d = new Date(u.lastActive);
-        if (now - d.getTime() <= oneDayMs) {
-          const h = d.getHours();
-          const bucket = Math.min(Math.floor(h / 2), hours.length - 1);
-          realUserCounts[bucket] += 1;
-        }
-      });
+  // Timeframe totals for summary strip
+  const chartTotals = useMemo(() => {
+    const totalQueries = chartData.reduce((acc, b) => acc + b.queries, 0);
+    const activeBuckets = chartData.filter(b => b.users > 0 || b.queries > 0).length;
+    const peakQueries = chartData.reduce((max, b) => Math.max(max, b.queries), 0);
+    const peakUsers = chartData.reduce((max, b) => Math.max(max, b.users), 0);
+    return { totalQueries, activeBuckets, peakQueries, peakUsers };
+  }, [chartData]);
 
-      return hours.map((hour, idx) => {
-        const u = realUserCounts[idx] || (users.length > 0 ? 1 : 0);
-        const q = realQueryCounts[idx] || Math.round(u * 2);
-        return {
-          label: hour,
-          users: Math.max(u, idx === 10 ? Math.max(users.length, 1) : 0),
-          queries: Math.max(q, idx === 10 ? totalQueriesCount : 0)
-        };
-      });
-    } else if (chartTimeframe === '7d') {
-      const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
-      const realUserCounts = days.map(() => 0);
-      const realQueryCounts = days.map(() => 0);
-
-      queries.forEach(q => {
-        const d = new Date(q.timestamp);
-        if (now - d.getTime() <= 7 * oneDayMs) {
-          const dayIdx = (d.getDay() + 6) % 7;
-          realQueryCounts[dayIdx] += 1;
-        }
-      });
-
-      users.forEach(u => {
-        if (!u.lastActive) return;
-        const d = new Date(u.lastActive);
-        if (now - d.getTime() <= 7 * oneDayMs) {
-          const dayIdx = (d.getDay() + 6) % 7;
-          realUserCounts[dayIdx] += 1;
-        }
-      });
-
-      return days.map((day, idx) => {
-        const u = realUserCounts[idx];
-        const q = realQueryCounts[idx];
-        return {
-          label: day,
-          users: u > 0 ? u : (users.length > 0 ? 1 : 0),
-          queries: q > 0 ? q : (totalQueriesCount > 0 ? Math.ceil(totalQueriesCount / 7) : 0)
-        };
-      });
-    } else {
-      const points = [];
-      for (let i = 28; i >= 0; i -= 4) {
-        const targetDate = new Date(now - i * oneDayMs);
-        const label = `${targetDate.getDate()} ${targetDate.toLocaleDateString('uk-UA', { month: 'short' })}`;
-        
-        const qCount = queries.filter(q => {
-          const qd = new Date(q.timestamp);
-          return Math.abs(qd.getTime() - targetDate.getTime()) <= 2 * oneDayMs;
-        }).length;
-
-        const uCount = users.filter(u => {
-          if (!u.lastActive) return false;
-          const ud = new Date(u.lastActive);
-          return Math.abs(ud.getTime() - targetDate.getTime()) <= 2 * oneDayMs;
-        }).length;
-
-        points.push({
-          label,
-          users: Math.max(uCount, users.length > 0 ? 1 : 0),
-          queries: Math.max(qCount, totalQueriesCount > 0 ? Math.ceil(totalQueriesCount / 8) : 0)
-        });
-      }
-      return points;
-    }
-  }, [chartTimeframe, queries, users, now, totalQueriesCount]);
+  // Nice integer scale ceiling divisible by 2/4 so Y-axis ticks stay clean
+  const niceIntegerMax = (raw: number): number => {
+    if (raw <= 0) return 4;
+    if (raw <= 2) return 2;
+    if (raw <= 4) return 4;
+    if (raw <= 8) return 8;
+    return Math.ceil(raw / 4) * 4;
+  };
 
   // SVG Chart Dimensions
   const chartWidth = 560;
-  const chartHeight = 160;
-  const paddingX = 24;
-  const paddingY = 20;
-  const plotWidth = chartWidth - paddingX * 2;
-  const plotHeight = chartHeight - paddingY * 2;
+  const chartHeight = 192;
+  const padLeft = 34;
+  const padRight = 32;
+  const padTop = 18;
+  const padBottom = 26;
+  const plotWidth = chartWidth - padLeft - padRight;
+  const plotHeight = chartHeight - padTop - padBottom;
+  const groundY = padTop + plotHeight;
 
-  const maxVal = Math.max(...chartData.map(d => Math.max(d.users, d.queries)), 4);
-  const minVal = 0;
+  const qScaleMax = niceIntegerMax(chartTotals.peakQueries);
+  const uScaleMax = niceIntegerMax(chartTotals.peakUsers);
+  const primaryScaleMax = chartMetricFilter === 'users' ? uScaleMax : qScaleMax;
 
-  const points = chartData.map((d, idx) => {
-    const val = d.users;
-    const x = paddingX + (idx / Math.max(chartData.length - 1, 1)) * plotWidth;
-    const y = chartHeight - paddingY - ((val - minVal) / (maxVal - minVal)) * plotHeight;
-    return { ...d, x, y };
-  });
+  const slotWidth = plotWidth / Math.max(chartData.length, 1);
+  const barWidth = Math.max(4, Math.min(26, slotWidth * 0.56));
 
-  const pathD = useMemo(() => {
-    if (points.length === 0) return '';
-    return points.reduce((acc, curr, idx, arr) => {
+  const points = useMemo(() => {
+    return chartData.map((d, idx) => {
+      const x = padLeft + (idx + 0.5) * slotWidth;
+      const qY = groundY - (d.queries / qScaleMax) * plotHeight;
+      const uY = groundY - (d.users / uScaleMax) * plotHeight;
+      return { ...d, x, qY, uY };
+    });
+  }, [chartData, padLeft, slotWidth, groundY, plotHeight, qScaleMax, uScaleMax]);
+
+  const buildSmoothPath = (coords: { x: number; y: number }[]) => {
+    if (coords.length === 0) return '';
+    return coords.reduce((acc, curr, idx, arr) => {
       if (idx === 0) return `M ${curr.x} ${curr.y}`;
       const prev = arr[idx - 1];
       const cx = (prev.x + curr.x) / 2;
       return `${acc} C ${cx} ${prev.y}, ${cx} ${curr.y}, ${curr.x} ${curr.y}`;
     }, '');
+  };
+
+  const usersPathD = useMemo(() => {
+    return buildSmoothPath(points.map(p => ({ x: p.x, y: p.uY })));
   }, [points]);
 
-  const areaD = useMemo(() => {
-    if (!pathD || points.length === 0) return '';
+  const usersAreaD = useMemo(() => {
+    if (!usersPathD || points.length === 0) return '';
     const last = points[points.length - 1];
     const first = points[0];
-    const groundY = chartHeight - paddingY;
-    return `${pathD} L ${last.x} ${groundY} L ${first.x} ${groundY} Z`;
-  }, [pathD, points, chartHeight, paddingY]);
+    return `${usersPathD} L ${last.x} ${groundY} L ${first.x} ${groundY} Z`;
+  }, [usersPathD, points, groundY]);
+
+  const queriesPathD = useMemo(() => {
+    return buildSmoothPath(points.map(p => ({ x: p.x, y: p.qY })));
+  }, [points]);
+
+  const queriesAreaD = useMemo(() => {
+    if (!queriesPathD || points.length === 0) return '';
+    const last = points[points.length - 1];
+    const first = points[0];
+    return `${queriesPathD} L ${last.x} ${groundY} L ${first.x} ${groundY} Z`;
+  }, [queriesPathD, points, groundY]);
+
+  const hoveredPoint = hoveredChartIndex !== null ? points[hoveredChartIndex] ?? null : null;
 
   // -------------------------------------------------------------
   // Filtered & Paginated Users for TAB 5
@@ -1060,11 +1037,15 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     </div>
                   </div>
                   <div>
-                    <div className="text-2xl sm:text-3xl font-extrabold text-[#ECE8E1] tracking-tight">
+                    <div className="text-2xl sm:text-3xl font-extrabold text-[#ECE8E1] tracking-tight tabular-nums">
                       {totalQueriesCount}
                     </div>
-                    <div className="flex items-center gap-1 mt-1 text-[11px] text-[#8E8B83]">
-                      <span>~{(averageResponseTimeMs / 1000).toFixed(1)}с • {successRatePct}% успіх</span>
+                    <div className="flex items-center gap-1 mt-1 text-[11px] text-[#8E8B83] tabular-nums">
+                      {averageResponseTimeMs !== null && successRatePct !== null ? (
+                        <span>~{(averageResponseTimeMs / 1000).toFixed(1)}с • {successRatePct}% успіх</span>
+                      ) : (
+                        <span>Ще немає запитів</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1085,7 +1066,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     </div>
                   </div>
                   <div>
-                    <div className="text-2xl sm:text-3xl font-extrabold text-[#ECE8E1] tracking-tight">
+                    <div className="text-2xl sm:text-3xl font-extrabold text-[#ECE8E1] tracking-tight tabular-nums">
                       {models.length} <span className="text-base font-normal text-[#8E8B83]">/ {providers.length}</span>
                     </div>
                     <div className="flex items-center gap-1 mt-1 text-[11px] text-amber-400 font-medium">
@@ -1098,14 +1079,14 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
               {/* Interactive Activity Chart */}
               <div className="bg-[#242320] p-5 sm:p-6 rounded-3xl border border-[#363430]">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                   <div>
                     <div className="flex items-center gap-2">
                       <BarChart3 size={18} className="text-[#CC785C]" />
                       <h3 className="text-base font-bold text-[#ECE8E1]">Активність користувачів (Реальні дані)</h3>
                     </div>
                     <p className="text-xs text-[#8E8B83] mt-0.5">
-                      Клікайте на точки графіка для розгортання подій конкретної години чи дня
+                      Ковзне вікно за реальними подіями • Натисніть на стовпець чи точку для деталей
                     </p>
                   </div>
 
@@ -1144,97 +1125,262 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   </div>
                 </div>
 
+                {/* Series Filter & Live Readout Bar */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
+                  <div className="inline-flex items-center gap-1 bg-[#1B1A17] p-1 rounded-xl border border-[#302E2A] self-start">
+                    <button
+                      onClick={() => setChartMetricFilter('both')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                        chartMetricFilter === 'both'
+                          ? 'bg-[#2C2A26] text-[#FAF8F5]'
+                          : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                      }`}
+                    >
+                      Обидва
+                    </button>
+                    <button
+                      onClick={() => setChartMetricFilter('queries')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1.5 ${
+                        chartMetricFilter === 'queries'
+                          ? 'bg-[#3A2A22] text-[#CC785C]'
+                          : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full bg-[#CC785C]" />
+                      <span>Запити</span>
+                    </button>
+                    <button
+                      onClick={() => setChartMetricFilter('users')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1.5 ${
+                        chartMetricFilter === 'users'
+                          ? 'bg-[#1D2F27] text-emerald-400'
+                          : 'text-[#8E8B83] hover:text-[#ECE8E1]'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                      <span>Користувачі</span>
+                    </button>
+                  </div>
+
+                  {/* Dynamic Readout: hovered bucket or timeframe summary */}
+                  <div className="flex flex-wrap items-center gap-3 text-xs tabular-nums bg-[#1B1A17] px-3 py-1.5 rounded-xl border border-[#302E2A]">
+                    {hoveredPoint ? (
+                      <>
+                        <span className="font-semibold text-[#FAF8F5] flex items-center gap-1.5">
+                          <Clock size={12} className="text-[#CC785C]" />
+                          {hoveredPoint.fullLabel}
+                        </span>
+                        <span className="text-[#4A4740]">•</span>
+                        <span className="text-[#CC785C] font-semibold">{hoveredPoint.queries} запитів</span>
+                        <span className="text-emerald-400 font-semibold">{hoveredPoint.users} кор.</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-[#8E8B83]">
+                          За період ({chartTimeframe === '24h' ? '24 год' : chartTimeframe === '7d' ? '7 днів' : '30 днів'}):
+                        </span>
+                        <span className="text-[#CC785C] font-semibold">{chartTotals.totalQueries} запитів</span>
+                        <span className="text-[#4A4740]">•</span>
+                        <span className="text-emerald-400 font-semibold">пік {chartTotals.peakUsers} кор.</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 {/* SVG Chart Display */}
                 <div className="relative w-full overflow-hidden bg-[#1B1A17] p-3 sm:p-4 rounded-2xl border border-[#302E2A]">
                   <svg 
                     viewBox={`0 0 ${chartWidth} ${chartHeight}`} 
-                    className="w-full h-44 sm:h-52 overflow-visible select-none"
-                    preserveAspectRatio="none"
+                    className="w-full h-48 sm:h-56 overflow-visible select-none"
+                    onMouseLeave={() => setHoveredChartIndex(null)}
                   >
                     <defs>
-                      <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#CC785C" stopOpacity="0.45" />
-                        <stop offset="60%" stopColor="#CC785C" stopOpacity="0.12" />
+                      <linearGradient id="usersAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#34D399" stopOpacity="0.32" />
+                        <stop offset="70%" stopColor="#34D399" stopOpacity="0.08" />
+                        <stop offset="100%" stopColor="#34D399" stopOpacity="0.00" />
+                      </linearGradient>
+                      <linearGradient id="queriesAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#CC785C" stopOpacity="0.35" />
+                        <stop offset="70%" stopColor="#CC785C" stopOpacity="0.10" />
                         <stop offset="100%" stopColor="#CC785C" stopOpacity="0.00" />
                       </linearGradient>
                     </defs>
 
-                    {/* Grid lines */}
-                    {[0.25, 0.5, 0.75, 1].map((pct, idx) => {
-                      const y = chartHeight - paddingY - pct * plotHeight;
+                    {/* Horizontal Grid Lines & Y-Axis Ticks */}
+                    {[0, 0.5, 1].map((pct, idx) => {
+                      const y = groundY - pct * plotHeight;
+                      const leftVal = Math.round(pct * primaryScaleMax);
+                      const rightVal = Math.round(pct * uScaleMax);
                       return (
-                        <line 
-                          key={idx}
-                          x1={paddingX} 
-                          y1={y} 
-                          x2={chartWidth - paddingX} 
-                          y2={y} 
-                          stroke="#2A2824" 
-                          strokeDasharray="4 4"
-                          strokeWidth="1"
-                        />
-                      );
-                    })}
-
-                    {/* Area fill */}
-                    <path d={areaD} fill="url(#areaGradient)" />
-
-                    {/* Curve line */}
-                    <path 
-                      d={pathD} 
-                      fill="none" 
-                      stroke="#CC785C" 
-                      strokeWidth="2.5" 
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-
-                    {/* Interactive Points */}
-                    {points.map((pt, idx) => {
-                      const isHovered = hoveredPoint?.label === pt.label;
-                      return (
-                        <g 
-                          key={idx} 
-                          className="cursor-pointer"
-                          onClick={() => {
-                            setSelectedChartPoint({ label: pt.label, users: pt.users, queries: pt.queries });
-                            setDrillModal('chart_point');
-                          }}
-                        >
-                          <circle 
-                            cx={pt.x} 
-                            cy={pt.y} 
-                            r="14" 
-                            fill="transparent"
-                            onMouseEnter={() => setHoveredPoint(pt)}
-                            onTouchStart={() => setHoveredPoint(pt)}
+                        <g key={idx}>
+                          <line 
+                            x1={padLeft} 
+                            y1={y} 
+                            x2={chartWidth - padRight} 
+                            y2={y} 
+                            stroke={pct === 0 ? '#363430' : '#2A2824'} 
+                            strokeDasharray={pct === 0 ? undefined : '4 4'}
+                            strokeWidth="1"
                           />
-                          <circle 
-                            cx={pt.x} 
-                            cy={pt.y} 
-                            r={isHovered ? 6 : 4} 
-                            fill={isHovered ? "#FAF8F5" : "#CC785C"} 
-                            stroke="#1B1A17" 
-                            strokeWidth="2"
-                            className="transition-all duration-150"
-                          />
+                          <text
+                            x={padLeft - 6}
+                            y={y + 3}
+                            textAnchor="end"
+                            fill={chartMetricFilter === 'users' ? '#34D399' : '#9E9A92'}
+                            fontSize="9.5"
+                            fontFamily="monospace"
+                          >
+                            {leftVal}
+                          </text>
+                          {chartMetricFilter === 'both' && (
+                            <text
+                              x={chartWidth - padRight + 6}
+                              y={y + 3}
+                              textAnchor="start"
+                              fill="#34D399"
+                              fontSize="9.5"
+                              fontFamily="monospace"
+                            >
+                              {rightVal}
+                            </text>
+                          )}
                         </g>
                       );
                     })}
 
+                    {/* Hovered Vertical Crosshair Guide */}
+                    {hoveredPoint && (
+                      <line
+                        x1={hoveredPoint.x}
+                        y1={padTop}
+                        x2={hoveredPoint.x}
+                        y2={groundY}
+                        stroke="#48443D"
+                        strokeDasharray="3 3"
+                        strokeWidth="1"
+                      />
+                    )}
+
+                    {/* Queries Bars (when 'both' or 'queries') */}
+                    {(chartMetricFilter === 'both' || chartMetricFilter === 'queries') && points.map((pt, idx) => {
+                      const barHeight = Math.max(pt.queries > 0 ? 3 : 0, groundY - pt.qY);
+                      const isHovered = hoveredChartIndex === idx;
+                      return (
+                        <rect
+                          key={`bar-${idx}`}
+                          x={pt.x - barWidth / 2}
+                          y={groundY - barHeight}
+                          width={barWidth}
+                          height={barHeight}
+                          rx={Math.min(4, barWidth / 2)}
+                          fill="#CC785C"
+                          fillOpacity={
+                            chartMetricFilter === 'queries'
+                              ? isHovered ? 0.95 : 0.65
+                              : isHovered ? 0.72 : 0.36
+                          }
+                          className="transition-opacity duration-150"
+                        />
+                      );
+                    })}
+
+                    {/* Queries Smooth Trend Overlay (when 'queries' only) */}
+                    {chartMetricFilter === 'queries' && (
+                      <>
+                        <path d={queriesAreaD} fill="url(#queriesAreaGradient)" />
+                        <path
+                          d={queriesPathD}
+                          fill="none"
+                          stroke="#CC785C"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </>
+                    )}
+
+                    {/* Users Smooth Curve + Area (when 'both' or 'users') */}
+                    {(chartMetricFilter === 'both' || chartMetricFilter === 'users') && (
+                      <>
+                        <path d={usersAreaD} fill="url(#usersAreaGradient)" />
+                        <path
+                          d={usersPathD}
+                          fill="none"
+                          stroke="#34D399"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </>
+                    )}
+
+                    {/* Data Dots */}
+                    {points.map((pt, idx) => {
+                      const isHovered = hoveredChartIndex === idx;
+                      const showDot =
+                        isHovered ||
+                        pt.users > 0 ||
+                        (chartMetricFilter === 'queries' && pt.queries > 0);
+                      if (!showDot && chartData.length > 12) return null;
+                      const dotY = chartMetricFilter === 'queries' ? pt.qY : pt.uY;
+                      const dotColor = chartMetricFilter === 'queries' ? '#CC785C' : '#34D399';
+                      return (
+                        <circle
+                          key={`dot-${idx}`}
+                          cx={pt.x}
+                          cy={dotY}
+                          r={isHovered ? 5 : 3}
+                          fill={isHovered ? '#FAF8F5' : dotColor}
+                          stroke="#1B1A17"
+                          strokeWidth="1.75"
+                          className="transition-all duration-150 pointer-events-none"
+                        />
+                      );
+                    })}
+
+                    {/* Full-Height Interactive Column Hit Targets (mobile touch + hover + click) */}
+                    {points.map((pt, idx) => (
+                      <rect
+                        key={`hit-${idx}`}
+                        x={padLeft + idx * slotWidth}
+                        y={padTop}
+                        width={slotWidth}
+                        height={plotHeight + padBottom}
+                        fill="transparent"
+                        className="cursor-pointer"
+                        onMouseEnter={() => setHoveredChartIndex(idx)}
+                        onTouchStart={() => setHoveredChartIndex(idx)}
+                        onClick={() => {
+                          setSelectedChartPoint(pt);
+                          setDrillModal('chart_point');
+                        }}
+                      />
+                    ))}
+
                     {/* Bottom X-axis labels */}
                     {points.map((pt, idx) => {
-                      const showLabel = chartData.length <= 8 || idx % Math.ceil(chartData.length / 7) === 0 || idx === chartData.length - 1;
+                      const step =
+                        chartData.length <= 7
+                          ? 1
+                          : chartData.length <= 24
+                          ? 4
+                          : 5;
+                      const isLast = idx === chartData.length - 1;
+                      const tooCloseToLast = !isLast && chartData.length - 1 - idx < Math.max(2, Math.floor(step / 2));
+                      const showLabel = idx === 0 || isLast || (idx % step === 0 && !tooCloseToLast);
                       if (!showLabel) return null;
                       return (
                         <text
-                          key={idx}
+                          key={`xlab-${idx}`}
                           x={pt.x}
-                          y={chartHeight - 4}
+                          y={chartHeight - 6}
                           textAnchor="middle"
-                          fill="#7D7A73"
+                          fill={isLast ? '#ECE8E1' : '#7D7A73'}
+                          fontWeight={isLast ? 600 : 400}
                           fontSize="9.5"
                           fontFamily="sans-serif"
+                          className="pointer-events-none"
                         >
                           {pt.label}
                         </text>
@@ -1242,26 +1388,9 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     })}
                   </svg>
 
-                  {/* Tooltip on Hover */}
-                  {hoveredPoint && (
-                    <div 
-                      className="absolute top-4 right-4 bg-[#262420] border border-[#48443D] text-[#ECE8E1] px-3.5 py-2.5 rounded-xl shadow-xl text-xs z-10 transition-all pointer-events-none"
-                    >
-                      <div className="font-bold text-[#FAF8F5] mb-1 flex items-center gap-1.5">
-                        <Clock size={12} className="text-[#CC785C]" />
-                        <span>{hoveredPoint.label}</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div>
-                          <div className="text-[10px] text-[#8E8B83]">Користувачів</div>
-                          <div className="font-bold text-[#CC785C]">{hoveredPoint.users} онлайн</div>
-                        </div>
-                        <div className="w-px h-6 bg-[#383632]" />
-                        <div>
-                          <div className="text-[10px] text-[#8E8B83]">Генерацій</div>
-                          <div className="font-bold text-white">{hoveredPoint.queries} запитів</div>
-                        </div>
-                      </div>
+                  {chartTotals.totalQueries === 0 && chartTotals.peakUsers === 0 && (
+                    <div className="mt-1 text-center text-[11px] text-[#7D7A73]">
+                      За вибраний період подій ще не зафіксовано — графік оновиться автоматично при першій активності.
                     </div>
                   )}
                 </div>
@@ -1277,7 +1406,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     </div>
                     <div>
                       <div className="text-[11px] text-[#8E8B83]">Активність за добу</div>
-                      <div className="text-xs font-bold text-[#ECE8E1]">{active24hUsers.length} користувачів</div>
+                      <div className="text-xs font-bold text-[#ECE8E1] tabular-nums">{active24hUsers.length} користувачів</div>
                     </div>
                   </div>
 
@@ -1290,7 +1419,11 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     </div>
                     <div>
                       <div className="text-[11px] text-[#8E8B83]">Швидкість відповіді</div>
-                      <div className="text-xs font-bold text-[#ECE8E1]">~{(averageResponseTimeMs / 1000).toFixed(2)}с середня</div>
+                      <div className="text-xs font-bold text-[#ECE8E1] tabular-nums">
+                        {averageResponseTimeMs !== null
+                          ? `~${(averageResponseTimeMs / 1000).toFixed(2)}с середня`
+                          : 'Немає запитів'}
+                      </div>
                     </div>
                   </div>
 
@@ -1303,7 +1436,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     </div>
                     <div>
                       <div className="text-[11px] text-[#8E8B83]">База користувачів</div>
-                      <div className="text-xs font-bold text-[#ECE8E1]">{users.length} зареєстровано</div>
+                      <div className="text-xs font-bold text-[#ECE8E1] tabular-nums">{users.length} зареєстровано</div>
                     </div>
                   </div>
                 </div>
@@ -1991,7 +2124,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                 {paginatedUsers.length > 0 ? (
                   paginatedUsers.map(u => {
                     const isAdminUser = u.telegramId === 1365018137;
-                    const isOnline = u.lastActive && (now - new Date(u.lastActive).getTime() <= fifteenMinMs);
+                    const isOnline = u.lastActive && (liveNow - new Date(u.lastActive).getTime() <= fifteenMinMs);
                     const copyIdKey = `id_${u.id}`;
                     const copyUserKey = `user_${u.id}`;
 
@@ -3600,20 +3733,107 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
 
               {/* MODAL 5: CHART POINT DETAIL */}
               {drillModal === 'chart_point' && selectedChartPoint && (
-                <div className="space-y-3">
-                  <div className="p-4 bg-[#1B1A17] border border-[#302E2A] rounded-2xl flex items-center justify-between text-xs">
+                <div className="space-y-4">
+                  <div className="p-4 bg-[#1B1A17] border border-[#302E2A] rounded-2xl flex items-center justify-between gap-3 text-xs">
                     <div>
                       <div className="text-[#8E8B83]">Часовий інтервал:</div>
-                      <div className="text-sm font-bold text-[#FAF8F5]">{selectedChartPoint.label}</div>
+                      <div className="text-sm font-bold text-[#FAF8F5] mt-0.5">{selectedChartPoint.fullLabel}</div>
                     </div>
-                    <div className="text-right font-mono">
-                      <div className="text-[#CC785C] font-bold text-sm">{selectedChartPoint.users} онлайн</div>
-                      <div className="text-[#A09D95] text-[11px]">{selectedChartPoint.queries} запитів</div>
+                    <div className="text-right tabular-nums shrink-0">
+                      <div className="text-emerald-400 font-bold text-sm">{selectedChartPoint.users} кор.</div>
+                      <div className="text-[#CC785C] font-semibold text-xs">{selectedChartPoint.queries} запитів</div>
                     </div>
                   </div>
 
-                  <div className="text-xs text-[#8E8B83]">
-                    Показники зафіксовано на основі подій у базі Firestore за вибраний проміжок часу.
+                  {/* Active Users in this bucket */}
+                  {selectedChartPoint.activeUserNames.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-[#8E8B83] mb-2">
+                        Активні користувачі ({selectedChartPoint.activeUserNames.length}):
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedChartPoint.activeUserNames.map((name, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-1 rounded-lg bg-[#252421] border border-[#363430] text-xs font-medium text-[#ECE8E1]"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Real Queries in this bucket */}
+                  <div>
+                    <div className="text-xs font-semibold text-[#8E8B83] mb-2">
+                      Запити за цей період ({selectedChartPoint.bucketQueries.length}):
+                    </div>
+                    {selectedChartPoint.bucketQueries.length > 0 ? (
+                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        {selectedChartPoint.bucketQueries.map((q, idx) => (
+                          <div
+                            key={q.id || idx}
+                            className="p-3 bg-[#1B1A17] border border-[#2E2C28] rounded-xl text-xs flex items-start justify-between gap-3"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-[#ECE8E1] truncate">{q.userName || 'Користувач'}</span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                    q.status === 'success'
+                                      ? 'bg-emerald-500/15 text-emerald-400'
+                                      : 'bg-red-500/15 text-red-400'
+                                  }`}
+                                >
+                                  {q.status === 'success' ? 'Успіх' : 'Помилка'}
+                                </span>
+                              </div>
+                              <div className="text-[11px] font-mono text-[#CC785C] mt-0.5 truncate">{q.modelId}</div>
+                              {q.promptSnippet && (
+                                <div className="text-[11px] text-[#8E8B83] mt-1 line-clamp-1">{q.promptSnippet}</div>
+                              )}
+                            </div>
+                            <div className="text-right tabular-nums shrink-0">
+                              <div className="text-[11px] text-[#A09D95]">
+                                {new Date(q.timestamp).toLocaleTimeString('uk-UA', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                  second: '2-digit'
+                                })}
+                              </div>
+                              <div className="text-[11px] text-[#7D7A73] mt-0.5">
+                                {((q.durationMs || 0) / 1000).toFixed(1)}с
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : selectedChartPoint.bucketActivities.length > 0 ? (
+                      <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                        {selectedChartPoint.bucketActivities.map((act, idx) => (
+                          <div
+                            key={act.id || idx}
+                            className="p-2.5 bg-[#1B1A17] border border-[#2E2C28] rounded-xl text-xs flex items-center justify-between gap-3"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-[#ECE8E1] font-medium truncate">{act.description}</div>
+                              {act.user && <div className="text-[11px] text-[#8E8B83]">{act.user}</div>}
+                            </div>
+                            <span className="text-[11px] text-[#7D7A73] tabular-nums shrink-0">
+                              {new Date(act.timestamp).toLocaleTimeString('uk-UA', {
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-4 bg-[#1B1A17] border border-[#2E2C28] rounded-xl text-xs text-[#8E8B83] text-center">
+                        У цьому часовому інтервалі запитів або подій активності не зафіксовано.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
