@@ -18,12 +18,21 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
     return null;
   }
 
-  // Auto-detect effective media type from URL if settings.mediaType was unset or 'none'
+  // Respect explicit mediaType from Admin Panel; only correct clear file extension mismatches
   const rawUrl = settings.mediaUrl?.trim() || '';
-  const isVideoUrl = rawUrl.includes('.mp4') || rawUrl.includes('.webm') || rawUrl.includes('pinimg.com') || settings.mediaType === 'video';
-  const effectiveMediaType: 'video' | 'gif' | 'image' | 'none' = rawUrl
-    ? (isVideoUrl ? 'video' : (settings.mediaType !== 'none' ? settings.mediaType : 'image'))
-    : 'none';
+  const cleanLowerUrl = rawUrl.toLowerCase().split('?')[0];
+  const hasExplicitVideoExt = /\.(mp4|webm|mov|m4v)$/.test(cleanLowerUrl);
+  const hasExplicitGifExt = cleanLowerUrl.endsWith('.gif');
+  const hasExplicitImageExt = /\.(jpe?g|png|webp|avif|svg)$/.test(cleanLowerUrl);
+
+  let effectiveMediaType: 'video' | 'gif' | 'image' | 'none' = settings.mediaType || 'none';
+  if (settings.mediaType === 'none' || !rawUrl) {
+    effectiveMediaType = 'none';
+  } else if (settings.mediaType === 'video' && (hasExplicitImageExt || hasExplicitGifExt)) {
+    effectiveMediaType = hasExplicitGifExt ? 'gif' : 'image';
+  } else if ((settings.mediaType === 'image' || settings.mediaType === 'gif') && hasExplicitVideoExt) {
+    effectiveMediaType = 'video';
+  }
 
   const hasPrimaryMedia = effectiveMediaType !== 'none' && Boolean(rawUrl);
 
@@ -196,7 +205,7 @@ export function AppPreloader({ settings, onFinished, isPreviewMode = false }: Ap
 
             <div className="flex items-center gap-2">
               {/* Unmute button for video */}
-              {settings.mediaType === 'video' && (
+              {effectiveMediaType === 'video' && (
                 <button
                   onClick={() => setIsMuted(!isMuted)}
                   className="p-2.5 rounded-full bg-black/60 hover:bg-black/80 text-white/90 hover:text-white border border-white/15 backdrop-blur-md transition-all active:scale-95 shadow-md"

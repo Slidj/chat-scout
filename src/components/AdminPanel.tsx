@@ -93,6 +93,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   const [adminTestingPreloader, setAdminTestingPreloader] = useState(false);
   const [isResolvingMedia, setIsResolvingMedia] = useState(false);
   const [mediaResolveFeedback, setMediaResolveFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const isPreloaderDirtyRef = useRef(false);
 
   // Drill-down Modal State (Clickable Cards & Stats)
   const [drillModal, setDrillModal] = useState<DrillDownModal>(null);
@@ -180,16 +181,18 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     });
     const unsubPreloader = subscribePreloaderSettings((settings) => {
       setPreloaderSettings(settings);
-      setPreloaderEnabled(settings.isEnabled);
-      setPreloaderMediaType(settings.mediaType);
-      setPreloaderMediaUrl(settings.mediaUrl || '');
-      setPreloaderDuration(settings.durationSeconds || 15);
-      setPreloaderTitle(settings.title || '');
-      setPreloaderSubtext(settings.subtext || '');
-      setPreloaderAllowSkip(settings.allowSkip ?? true);
-      setPreloaderSecondaryImage(settings.secondaryImageUrl || '');
-      setPreloaderSecondaryDuration(settings.secondaryDurationSeconds || 3);
-      setPreloaderSecondaryText(settings.secondaryText || 'Завантаження застосунку...');
+      if (!isPreloaderDirtyRef.current) {
+        setPreloaderEnabled(settings.isEnabled);
+        setPreloaderMediaType(settings.mediaType);
+        setPreloaderMediaUrl(settings.mediaUrl || '');
+        setPreloaderDuration(settings.durationSeconds || 15);
+        setPreloaderTitle(settings.title || '');
+        setPreloaderSubtext(settings.subtext || '');
+        setPreloaderAllowSkip(settings.allowSkip ?? true);
+        setPreloaderSecondaryImage(settings.secondaryImageUrl || '');
+        setPreloaderSecondaryDuration(settings.secondaryDurationSeconds || 3);
+        setPreloaderSecondaryText(settings.secondaryText || 'Завантаження застосунку...');
+      }
     });
 
     const clockInterval = window.setInterval(() => {
@@ -581,23 +584,63 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       return;
     }
 
+    const cleanLower = target.toLowerCase().split('?')[0];
+    if (cleanLower.endsWith('.gif')) {
+      isPreloaderDirtyRef.current = true;
+      setPreloaderMediaType('gif');
+      setMediaResolveFeedback({
+        type: 'success',
+        message: '✓ Пряме посилання на GIF-анімацію розпізнано та підключено!'
+      });
+      return;
+    }
+    if (/\.(jpe?g|png|webp|avif|svg)$/.test(cleanLower)) {
+      isPreloaderDirtyRef.current = true;
+      setPreloaderMediaType('image');
+      setMediaResolveFeedback({
+        type: 'success',
+        message: '✓ Пряме посилання на фото / банер розпізнано та підключено!'
+      });
+      return;
+    }
+    if (/\.(mp4|webm|mov|m4v)$/.test(cleanLower)) {
+      isPreloaderDirtyRef.current = true;
+      setPreloaderMediaType('video');
+      setMediaResolveFeedback({
+        type: 'success',
+        message: '✓ Пряме посилання на відео (.mp4/.webm) розпізнано та підключено!'
+      });
+      return;
+    }
+
     setIsResolvingMedia(true);
     setMediaResolveFeedback(null);
     try {
       const res = await resolveMediaLink(target);
       if (res.success && res.mediaUrl) {
+        isPreloaderDirtyRef.current = true;
         setPreloaderMediaUrl(res.mediaUrl);
-        if (res.mediaType) {
-          setPreloaderMediaType(res.mediaType);
-        }
+        const resolvedUrlLower = res.mediaUrl.toLowerCase().split('?')[0];
+        const resolvedType: 'video' | 'gif' | 'image' =
+          res.mediaType === 'gif' || resolvedUrlLower.endsWith('.gif')
+            ? 'gif'
+            : res.mediaType === 'image'
+            ? 'image'
+            : 'video';
+        setPreloaderMediaType(resolvedType);
         setMediaResolveFeedback({
           type: 'success',
-          message: '✓ Відео з Pinterest успішно розпізнано! Прямий HD відеопотік (.mp4) підключено.'
+          message:
+            resolvedType === 'video'
+              ? '✓ Відео з Pinterest успішно розпізнано! Прямий HD відеопотік (.mp4) підключено.'
+              : resolvedType === 'gif'
+              ? '✓ GIF-анімацію успішно розпізнано та підключено!'
+              : '✓ Фото / банер з Pinterest успішно розпізнано та підключено!'
         });
       } else {
         setMediaResolveFeedback({
           type: 'error',
-          message: res.error || 'Не вдалося автоматично знайти відео за цим посиланням.'
+          message: res.error || 'Не вдалося автоматично знайти медіа за цим посиланням.'
         });
       }
     } catch (err: any) {
@@ -614,31 +657,28 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     if (e) e.preventDefault();
 
     // Guard against large base64 strings exceeding Firestore 1MB document limit
-    if (preloaderMediaUrl.startsWith('data:') && preloaderMediaUrl.length > 800 * 1024) {
+    if (preloaderMediaType !== 'none' && preloaderMediaUrl.startsWith('data:') && preloaderMediaUrl.length > 800 * 1024) {
       alert(
         '⚠️ Розмір медіа-файлу перевищує ліміт бази даних (1 МБ).\n\n' +
-        '👉 Скопіюйте посилання на це відео з Pinterest (наприклад: https://pin.it/...) та вставте його замість прямого файлу — це дозволить транслювати відео у високій якості без обмежень!'
+        '👉 Скопіюйте посилання на це медіа з Pinterest (наприклад: https://pin.it/...) та вставте його замість прямого файлу!'
       );
       return;
     }
 
-    // Auto-detect video if URL contains mp4 / pinimg
-    const cleanUrl = preloaderMediaUrl.trim();
-    let finalType = preloaderMediaType;
-    if (cleanUrl) {
-      if (cleanUrl.includes('.mp4') || cleanUrl.includes('.webm') || cleanUrl.includes('pinimg.com')) {
-        finalType = 'video';
-      } else if (finalType === 'none') {
-        finalType = 'image';
-      }
+    const finalType = preloaderMediaType;
+    const cleanUrl = finalType === 'none' ? '' : preloaderMediaUrl.trim();
+
+    if (finalType !== 'none' && !cleanUrl) {
+      alert('Будь ласка, вкажіть посилання на медіа або завантажте файл, або оберіть режим «Без відео».');
+      return;
     }
 
-    // Automatically generate a fresh version ID on every save so ALL users (and admin) immediately see the new video!
+    // Automatically generate a fresh version ID on every save so ALL users (and admin) immediately see the updated campaign
     const freshVersionId = `v_${Date.now()}`;
 
     setIsSavingPreloader(true);
     try {
-      await updatePreloaderSettings({
+      const nextPayload = {
         isEnabled: preloaderEnabled,
         mediaType: finalType,
         mediaUrl: cleanUrl,
@@ -650,14 +690,22 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
         secondaryDurationSeconds: Number(preloaderSecondaryDuration) || 3,
         secondaryText: preloaderSecondaryText.trim() || 'Завантаження застосунку...',
         versionId: freshVersionId
-      }, currentUser?.first_name || currentUser?.username || 'Admin');
+      };
 
-      // Clear local seen state for this new version so admin sees the new video campaign right away
+      await updatePreloaderSettings(
+        nextPayload,
+        currentUser?.first_name || currentUser?.username || 'Admin'
+      );
+
+      // Clear local seen state for this new version so admin sees the new preloader right away
       if (typeof window !== 'undefined') {
         localStorage.removeItem(`seen_preloader_version_${freshVersionId}`);
       }
 
+      isPreloaderDirtyRef.current = false;
       setPreloaderMediaType(finalType);
+      setPreloaderMediaUrl(cleanUrl);
+      setPreloaderSettings((prev) => ({ ...prev, ...nextPayload }));
       setPreloaderSaveSuccess(true);
       setTimeout(() => setPreloaderSaveSuccess(false), 3500);
     } catch (err: any) {
@@ -679,7 +727,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       await updatePreloaderSettings({
         versionId: newVersionId
       }, currentUser?.first_name || currentUser?.username || 'Admin');
-      alert(`Версію оновлено (${newVersionId})! Усі користувачі побачать це відео знову при наступному вході.`);
+      alert(`Версію оновлено (${newVersionId})! Усі користувачі побачать цю заставку знову при наступному вході.`);
     } catch (err: any) {
       alert('Помилка оновлення версії: ' + err.message);
     } finally {
@@ -699,12 +747,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
       alert(
         `⚠️ Файл завеликий для збереження в базі даних (${sizeMb} МБ).\n` +
         `Хмарна база даних підтримує файли з пристрою розміром до 750 КБ.\n\n` +
-        `💡 Рекомендовано: замість файлу вставте посилання на відео з Pinterest (наприклад: https://pin.it/... або https://pinterest.com/pin/...) і натисніть «Розпізнати» — це працює миттєво та транслює HD якість!`
+        `💡 Рекомендовано: замість файлу вставте посилання з Pinterest (наприклад: https://pin.it/... або https://pinterest.com/pin/...) і натисніть «Розпізнати»!`
       );
       e.target.value = '';
       return;
     }
 
+    isPreloaderDirtyRef.current = true;
     if (file.type.startsWith('video/')) {
       setPreloaderMediaType('video');
     } else if (file.type === 'image/gif') {
@@ -716,6 +765,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
+        isPreloaderDirtyRef.current = true;
         setPreloaderMediaUrl(event.target.result as string);
         setMediaResolveFeedback({
           type: 'info',
@@ -739,6 +789,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
+        isPreloaderDirtyRef.current = true;
         setPreloaderSecondaryImage(event.target.result as string);
       }
     };
@@ -2971,7 +3022,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     <input
                       type="checkbox"
                       checked={preloaderEnabled}
-                      onChange={(e) => setPreloaderEnabled(e.target.checked)}
+                      onChange={(e) => {
+                        isPreloaderDirtyRef.current = true;
+                        setPreloaderEnabled(e.target.checked);
+                      }}
                       className="w-4 h-4 rounded text-[#CC785C] focus:ring-[#CC785C] bg-[#1C1A17] border-[#3E3C36]"
                     />
                   </label>
@@ -2992,7 +3046,11 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => setPreloaderMediaType(m.id as any)}
+                        onClick={() => {
+                          isPreloaderDirtyRef.current = true;
+                          setPreloaderMediaType(m.id as 'video' | 'gif' | 'image' | 'none');
+                          setMediaResolveFeedback(null);
+                        }}
                         className={`p-3 rounded-2xl border text-left transition-all ${
                           preloaderMediaType === m.id
                             ? 'bg-[#2E251E] border-[#CC785C] text-white shadow-xs ring-1 ring-[#CC785C]/40'
@@ -3009,15 +3067,39 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                   </div>
                 </div>
 
+                {preloaderMediaType === 'none' && (
+                  <div className="p-4 bg-[#1C1B18] border border-[#35322D] rounded-2xl flex items-start gap-3 text-xs text-[#A8A49C]">
+                    <Waves size={18} className="text-emerald-400 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <div className="font-semibold text-[#FAF8F5]">
+                        Обрано режим «Без відео» — лише швидка хвильова заставка
+                      </div>
+                      <p className="leading-relaxed">
+                        Головне відео або банер не показуватимуться. Замість цього при вході відтвориться стильний прелоадер із гармонійною хвилею (налаштовується у блоці нижче). Натисніть <strong className="text-white">«Зберегти»</strong>, щоб застосувати режим.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Media URL & Upload if not 'none' */}
                 {preloaderMediaType !== 'none' && (
                   <div className="space-y-4 pt-1">
                     <div>
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                         <label className="text-xs font-semibold text-[#9E9A92] uppercase tracking-wider flex items-center gap-1.5">
-                          <span>Посилання на медіа (URL) *</span>
+                          <span>
+                            {preloaderMediaType === 'video'
+                              ? 'Посилання на відео (URL) *'
+                              : preloaderMediaType === 'gif'
+                              ? 'Посилання на GIF (URL) *'
+                              : 'Посилання на фото / банер (URL) *'}
+                          </span>
                           <span className="text-[10px] text-amber-400 font-normal normal-case bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-800/40">
-                            Підтримує Pinterest, pin.it, GIF, MP4
+                            {preloaderMediaType === 'video'
+                              ? 'Pinterest, pin.it, MP4, WebM'
+                              : preloaderMediaType === 'gif'
+                              ? 'GIF, Giphy, Tenor, Pinterest'
+                              : 'JPG, PNG, WebP, Pinterest'}
                           </span>
                         </label>
 
@@ -3026,7 +3108,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                           <span>Файл з пристрою (до 750 КБ)</span>
                           <input
                             type="file"
-                            accept="video/mp4,video/webm,video/*,image/gif,image/jpeg,image/png,image/webp"
+                            accept={
+                              preloaderMediaType === 'video'
+                                ? 'video/mp4,video/webm,video/*'
+                                : preloaderMediaType === 'gif'
+                                ? 'image/gif,image/webp'
+                                : 'image/jpeg,image/png,image/webp,image/*'
+                            }
                             onChange={handlePreloaderFileUpload}
                             className="hidden"
                           />
@@ -3041,12 +3129,13 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                             value={preloaderMediaUrl}
                             onChange={(e) => {
                               const val = e.target.value;
+                              isPreloaderDirtyRef.current = true;
                               setPreloaderMediaUrl(val);
-                              // Auto-suggest resolution if Pinterest link pasted
+                              // Auto-suggest resolution if Pinterest page link pasted
                               if ((val.includes('pin.it/') || val.includes('pinterest.com/pin/')) && !val.includes('.mp4')) {
                                 setMediaResolveFeedback({
                                   type: 'info',
-                                  message: '📌 Виявлено посилання на Pinterest! Натисніть «Розпізнати Pinterest», щоб отримати пряме HD відео.'
+                                  message: '📌 Виявлено посилання на Pinterest! Натисніть «Розпізнати Pinterest», щоб отримати пряме медіа-посилання.'
                                 });
                               }
                             }}
@@ -3059,13 +3148,20 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                                 }, 80);
                               }
                             }}
-                            placeholder="Вставте https://pin.it/... або пряме посилання на mp4/webm/gif"
+                            placeholder={
+                              preloaderMediaType === 'video'
+                                ? 'Вставте https://pin.it/... або пряме посилання на mp4/webm'
+                                : preloaderMediaType === 'gif'
+                                ? 'Вставте пряме посилання на .gif або Pinterest'
+                                : 'Вставте пряме посилання на .jpg/.png/.webp або Pinterest'
+                            }
                             className="w-full px-3.5 py-2.5 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm font-mono text-[#FAF8F5] focus:outline-none focus:border-[#CC785C] placeholder:text-[#5E5B54]"
                           />
                           {preloaderMediaUrl && (
                             <button
                               type="button"
                               onClick={() => {
+                                isPreloaderDirtyRef.current = true;
                                 setPreloaderMediaUrl('');
                                 setMediaResolveFeedback(null);
                               }}
@@ -3082,7 +3178,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                           onClick={() => handleResolveMediaUrl()}
                           disabled={isResolvingMedia || !preloaderMediaUrl.trim()}
                           className="px-4 py-2.5 bg-[#CC785C] hover:bg-[#D97757] text-white rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2 shadow-xs shrink-0"
-                          title="Автоматично витягти прямий MP4 відео-потік із Pinterest"
+                          title="Автоматично витягти пряме медіа-посилання із Pinterest"
                         >
                           <Sparkles size={14} className={isResolvingMedia ? 'animate-spin' : ''} />
                           <span>{isResolvingMedia ? 'Розпізнавання...' : 'Розпізнати Pinterest'}</span>
@@ -3113,6 +3209,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                             type="button"
                             onClick={() => {
                               const exampleUrl = 'https://pin.it/4q6ov1wS0';
+                              isPreloaderDirtyRef.current = true;
                               setPreloaderMediaUrl(exampleUrl);
                               handleResolveMediaUrl(exampleUrl);
                             }}
@@ -3128,7 +3225,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                             {preloaderMediaUrl.startsWith('data:') 
                               ? `Локальний файл (~${Math.round(preloaderMediaUrl.length / 1024)} КБ)` 
                               : preloaderMediaUrl.includes('pinimg.com')
-                              ? '✓ Pinterest CDN (HD stream)'
+                              ? `✓ Pinterest CDN (${preloaderMediaType === 'video' ? 'HD stream' : preloaderMediaType === 'gif' ? 'GIF' : 'Фото'})`
                               : 'Зовнішнє посилання'
                             }
                           </span>
@@ -3136,7 +3233,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       </div>
 
                       <div className="mt-2 p-3 bg-[#1C1B18] rounded-2xl border border-[#35322D] text-[11px] text-[#A8A49C] leading-relaxed">
-                        ✨ <strong className="text-white">Як працює підтримка Pinterest:</strong> просто скопіюйте посилання на відео з додатка Pinterest (наприклад <span className="font-mono text-amber-300">https://pin.it/...</span> або повний <span className="font-mono text-amber-300">pinterest.com/pin/...</span>) і вставте в поле вище. Застосунок сам знайде прямий HD потік відео <strong className="text-white">без необхідності шукати файл MP4 вручну</strong>, а завдяки розумному дзеркальному розмиттю вертикальні відео виглядають бездоганно без чорних смуг.
+                        ✨ <strong className="text-white">Як працює підтримка Pinterest:</strong> просто скопіюйте посилання на відео або зображення з додатка Pinterest (наприклад <span className="font-mono text-amber-300">https://pin.it/...</span> або повний <span className="font-mono text-amber-300">pinterest.com/pin/...</span>) і вставте в поле вище. Застосунок сам знайде прямий потік або зображення, а завдяки розумному дзеркальному розмиттю вертикальні матеріали виглядають бездоганно без чорних смуг.
                       </div>
                     </div>
 
@@ -3160,7 +3257,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                           max="60"
                           step="1"
                           value={preloaderDuration}
-                          onChange={(e) => setPreloaderDuration(Number(e.target.value))}
+                          onChange={(e) => {
+                            isPreloaderDirtyRef.current = true;
+                            setPreloaderDuration(Number(e.target.value));
+                          }}
                           className="flex-1 accent-[#CC785C] cursor-pointer"
                         />
                         <input
@@ -3168,7 +3268,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                           min="3"
                           max="120"
                           value={preloaderDuration}
-                          onChange={(e) => setPreloaderDuration(Number(e.target.value))}
+                          onChange={(e) => {
+                            isPreloaderDirtyRef.current = true;
+                            setPreloaderDuration(Number(e.target.value));
+                          }}
                           className="w-16 px-2 py-1 bg-[#252320] border border-[#3D3B36] rounded-lg text-xs font-mono text-center text-[#FAF8F5]"
                         />
                       </div>
@@ -3180,7 +3283,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                           <button
                             key={sec}
                             type="button"
-                            onClick={() => setPreloaderDuration(sec)}
+                            onClick={() => {
+                              isPreloaderDirtyRef.current = true;
+                              setPreloaderDuration(sec);
+                            }}
                             className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition-colors ${
                               preloaderDuration === sec
                                 ? 'bg-[#CC785C] text-white'
@@ -3202,7 +3308,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                         <input
                           type="text"
                           value={preloaderTitle}
-                          onChange={(e) => setPreloaderTitle(e.target.value)}
+                          onChange={(e) => {
+                            isPreloaderDirtyRef.current = true;
+                            setPreloaderTitle(e.target.value);
+                          }}
                           placeholder="напр. Зі святом! або AI Studio"
                           className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
                         />
@@ -3215,7 +3324,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                         <input
                           type="text"
                           value={preloaderSubtext}
-                          onChange={(e) => setPreloaderSubtext(e.target.value)}
+                          onChange={(e) => {
+                            isPreloaderDirtyRef.current = true;
+                            setPreloaderSubtext(e.target.value);
+                          }}
                           placeholder="напр. Підключення нейромереж..."
                           className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-sm text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
                         />
@@ -3235,7 +3347,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       <input
                         type="checkbox"
                         checked={preloaderAllowSkip}
-                        onChange={(e) => setPreloaderAllowSkip(e.target.checked)}
+                        onChange={(e) => {
+                          isPreloaderDirtyRef.current = true;
+                          setPreloaderAllowSkip(e.target.checked);
+                        }}
                         className="w-4 h-4 rounded text-[#CC785C] focus:ring-[#CC785C] bg-[#252320] border-[#3E3C36]"
                       />
                     </div>
@@ -3328,7 +3443,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       <input
                         type="text"
                         value={preloaderSecondaryImage}
-                        onChange={(e) => setPreloaderSecondaryImage(e.target.value)}
+                        onChange={(e) => {
+                          isPreloaderDirtyRef.current = true;
+                          setPreloaderSecondaryImage(e.target.value);
+                        }}
                         placeholder="URL зображення (якщо пусто — фірмова зірка)"
                         className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-xs text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
                       />
@@ -3347,7 +3465,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                           max="6"
                           step="0.5"
                           value={preloaderSecondaryDuration}
-                          onChange={(e) => setPreloaderSecondaryDuration(Number(e.target.value))}
+                          onChange={(e) => {
+                            isPreloaderDirtyRef.current = true;
+                            setPreloaderSecondaryDuration(Number(e.target.value));
+                          }}
                           className="flex-1 accent-[#CC785C] cursor-pointer"
                         />
                         <div className="text-xs font-mono font-bold text-[#FAF8F5] w-10 text-right">
@@ -3363,7 +3484,10 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                       <input
                         type="text"
                         value={preloaderSecondaryText}
-                        onChange={(e) => setPreloaderSecondaryText(e.target.value)}
+                        onChange={(e) => {
+                          isPreloaderDirtyRef.current = true;
+                          setPreloaderSecondaryText(e.target.value);
+                        }}
                         placeholder="Завантаження застосунку..."
                         className="w-full px-3 py-2 bg-[#1C1A17] border border-[#383632] rounded-xl text-xs text-[#FAF8F5] focus:outline-none focus:border-[#CC785C]"
                       />
