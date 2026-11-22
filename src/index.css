@@ -217,6 +217,34 @@
   transform: rotate(45deg);
 }
 
+/* KaTeX Math Rendering Styles */
+.claude-markdown .katex {
+  font-size: 1.04em;
+  color: #FAF8F5;
+  white-space: normal;
+  word-break: normal;
+}
+
+.claude-markdown .katex .text,
+.claude-markdown .katex .textbf,
+.claude-markdown .katex .textit {
+  font-family: var(--font-sans);
+}
+
+.claude-markdown .katex-block-wrapper {
+  background-color: rgba(28, 27, 24, 0.7);
+  border: 1px solid #2F2D29;
+  border-radius: 0.875rem;
+  padding: 0.75rem 1rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.claude-markdown .katex-display {
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* Syntax Highlighting Tokens (Claude Dark Palette) */
 .hljs-keyword,
 .hljs-selector-tag,

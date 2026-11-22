@@ -1,6 +1,8 @@
 import React, { memo, useMemo } from 'react';
-import { Marked } from 'marked';
+import { Marked, TokenizerAndRendererExtension } from 'marked';
 import hljs from 'highlight.js';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 interface MarkdownContentProps {
   content: string;
@@ -18,6 +20,165 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+function isLikelyCurrencyProse(inner: string): boolean {
+  const trimmed = inner.trim();
+  if (!trimmed) return true;
+  // Explicit LaTeX commands or mathematical notation -> always render as math
+  if (/[\\^_{}=<>|×÷≈≠≤≥±∞∑∏∫√]/.test(trimmed)) return false;
+  // Plain currency numbers like "$50" or "$1,200.50"
+  if (/^\d[\d,.\s]*$/.test(trimmed)) return true;
+  // Numbers followed by regular words with spaces like "$50 and 100$"
+  if (/^\d/.test(trimmed) && /\s/.test(trimmed) && !/[+\-*/()]/.test(trimmed)) return true;
+  return false;
+}
+
+function renderKatexHtml(expr: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(expr.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: false,
+      output: 'htmlAndMathml',
+    });
+  } catch {
+    return escapeHtml(expr);
+  }
+}
+
+const blockMathExtension: TokenizerAndRendererExtension = {
+  name: 'blockMath',
+  level: 'block',
+  start(src: string) {
+    const match = src.match(/(?:^|\n)[ \t]{0,3}(?:\$\$|\\\[)/);
+    if (!match || match.index === undefined) return undefined;
+    return match[0].startsWith('\n') ? match.index + 1 : match.index;
+  },
+  tokenizer(src: string) {
+    const dollarMatch = src.match(/^[ \t]{0,3}\$\$([\s\S]+?)\$\$[ \t]*(?:\n+|$)/);
+    if (dollarMatch && dollarMatch[1].trim()) {
+      return {
+        type: 'blockMath',
+        raw: dollarMatch[0],
+        text: dollarMatch[1],
+      };
+    }
+
+    const bracketMatch = src.match(/^[ \t]{0,3}\\\[([\s\S]+?)\\\][ \t]*(?:\n+|$)/);
+    if (bracketMatch && bracketMatch[1].trim()) {
+      return {
+        type: 'blockMath',
+        raw: bracketMatch[0],
+        text: bracketMatch[1],
+      };
+    }
+
+    return undefined;
+  },
+  renderer(token: any) {
+    return `<div class="katex-block-wrapper my-3 overflow-x-auto">${renderKatexHtml(token.text || '', true)}</div>`;
+  },
+};
+
+const inlineMathExtension: TokenizerAndRendererExtension = {
+  name: 'inlineMath',
+  level: 'inline',
+  start(src: string) {
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '$') {
+        if (i === 0 || src[i - 1] !== '\\') return i;
+      } else if (ch === '\\' && (src[i + 1] === '(' || src[i + 1] === '[')) {
+        if (i === 0 || src[i - 1] !== '\\') return i;
+      }
+    }
+    return undefined;
+  },
+  tokenizer(src: string) {
+    // 1. Inline $$...$$ fallback (when used mid-paragraph)
+    if (src.startsWith('$$')) {
+      const match = src.match(/^\$\$([\s\S]+?)\$\$/);
+      if (match && match[1].trim()) {
+        return {
+          type: 'inlineMath',
+          raw: match[0],
+          text: match[1],
+          displayMode: true,
+        };
+      }
+      return undefined;
+    }
+
+    // 2. Inline \[...\] fallback
+    if (src.startsWith('\\[')) {
+      const match = src.match(/^\\\[([\s\S]+?)\\\]/);
+      if (match && match[1].trim()) {
+        return {
+          type: 'inlineMath',
+          raw: match[0],
+          text: match[1],
+          displayMode: true,
+        };
+      }
+      return undefined;
+    }
+
+    // 3. Standard inline \(...\)
+    if (src.startsWith('\\(')) {
+      const match = src.match(/^\\\(([\s\S]+?)\\\)/);
+      if (match && match[1].trim()) {
+        return {
+          type: 'inlineMath',
+          raw: match[0],
+          text: match[1],
+          displayMode: false,
+        };
+      }
+      return undefined;
+    }
+
+    // 4. Dollar inline math $...$
+    if (!src.startsWith('$') || src.length < 3 || /\s/.test(src[1])) {
+      return undefined;
+    }
+
+    for (let i = 1; i < src.length; i++) {
+      // Stop at blank line
+      if (src[i] === '\n' && src[i + 1] === '\n') {
+        return undefined;
+      }
+      if (src[i] === '$' && src[i - 1] !== '\\') {
+        // Ignore $$ inside scan
+        if (src[i + 1] === '$') return undefined;
+        // Closing $ must not be preceded by whitespace or immediately followed by a digit
+        if (/\s/.test(src[i - 1]) || (i + 1 < src.length && /\d/.test(src[i + 1]))) {
+          return undefined;
+        }
+
+        const inner = src.slice(1, i);
+        // If it crosses a newline, only treat as math when explicit LaTeX commands exist
+        if (inner.includes('\n') && !inner.includes('\\')) {
+          return undefined;
+        }
+        if (isLikelyCurrencyProse(inner)) {
+          return undefined;
+        }
+
+        return {
+          type: 'inlineMath',
+          raw: src.slice(0, i + 1),
+          text: inner,
+          displayMode: false,
+        };
+      }
+    }
+
+    return undefined;
+  },
+  renderer(token: any) {
+    return renderKatexHtml(token.text || '', Boolean(token.displayMode));
+  },
+};
 
 /**
  * Pre-cleans and balances unclosed markdown tokens to prevent flicker during live streaming
@@ -96,6 +257,7 @@ function buildMarkedInstance(skipAutoHighlight: boolean): Marked {
   });
 
   instance.use({
+    extensions: [blockMathExtension, inlineMathExtension],
     renderer: {
       code({ text, lang }) {
         return createCodeBlockHtml(text || '', lang || '', skipAutoHighlight);
