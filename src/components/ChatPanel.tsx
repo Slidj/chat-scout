@@ -1150,20 +1150,31 @@ export function ChatPanel({
         {(isAutoScrollPaused && (isLoading || typingMessageId)) ? (
           <button
             onClick={resumeAutoScroll}
-            className="fixed bottom-28 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-[#242320]/95 border border-[#CC785C] text-[#EDE9DF] hover:bg-[#2C2A26] flex items-center gap-2 shadow-xl backdrop-blur-md z-30 transition-all active:scale-95 animate-in fade-in"
+            style={{
+              bottom: isComposerExpanded
+                ? 'calc(9rem + var(--safe-bottom, 0px))'
+                : 'calc(5.5rem + var(--safe-bottom, 0px))'
+            }}
+            className="fixed left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-[#242320]/95 border border-[#CC785C]/90 text-[#FAF8F5] hover:bg-[#2C2A26] flex items-center gap-2 shadow-[0_8px_24px_rgba(0,0,0,0.65)] backdrop-blur-md z-30 transition-all active:scale-95 animate-in fade-in"
             title="Слідкувати за відповіддю"
           >
             <span className="w-2 h-2 rounded-full bg-[#CC785C] animate-ping" />
-            <span className="text-xs font-semibold text-[#EDE9DF]">Слідкувати за текстом</span>
+            <span className="text-xs font-semibold text-[#FAF8F5]">Слідкувати за текстом</span>
             <ArrowDown size={14} className="text-[#CC785C]" />
           </button>
         ) : showScrollBottom ? (
           <button
             onClick={resumeAutoScroll}
-            className="fixed bottom-28 left-1/2 -translate-x-1/2 w-9 h-9 rounded-full bg-[#2C2A26]/90 border border-[#403E3A] text-[#EDE9DF] hover:bg-[#383632] flex items-center justify-center shadow-lg backdrop-blur-sm z-30 transition-all active:scale-95 animate-in fade-in zoom-in-95"
+            style={{
+              bottom: isComposerExpanded
+                ? 'calc(9rem + var(--safe-bottom, 0px))'
+                : 'calc(5.5rem + var(--safe-bottom, 0px))'
+            }}
+            className="fixed left-1/2 -translate-x-1/2 w-11 h-11 rounded-full bg-[#272623]/95 hover:bg-[#33312C] border border-[#ECE8E1]/35 hover:border-[#ECE8E1]/60 ring-1 ring-black/50 text-[#FAF8F5] flex items-center justify-center shadow-[0_8px_24px_rgba(0,0,0,0.68)] backdrop-blur-md z-30 transition-all active:scale-95 animate-in fade-in zoom-in-95"
             title="До кінця чату"
+            aria-label="Прокрутити до кінця чату"
           >
-            <ArrowDown size={18} />
+            <ArrowDown size={20} strokeWidth={2.2} />
           </button>
         ) : null}
       </main>
