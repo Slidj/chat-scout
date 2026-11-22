@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { X, MessageSquare, Copy, Check } from 'lucide-react';
+import { X, MessageSquare, Copy, Check, Image as ImageIcon, Film } from 'lucide-react';
 import { AiModel, Provider } from '../types';
+import { inferModelMediaType } from '../lib/api';
 import { resolveColorToHex } from '../lib/utils';
 
 interface ModelDetailsSheetProps {
@@ -161,6 +162,7 @@ export function ModelDetailsSheet({
   const tierLabel = renderedModel.tier && renderedModel.tier !== 'common'
     ? TIER_LABELS_UK[renderedModel.tier]
     : null;
+  const mediaType = inferModelMediaType(renderedModel.apiModelId, renderedModel.modelType);
 
   const handleCopyApiId = () => {
     if (!renderedModel.apiModelId) return;
@@ -231,6 +233,24 @@ export function ModelDetailsSheet({
                     <span className="text-[#CC785C] font-medium">{tierLabel}</span>
                   </>
                 )}
+                {mediaType === 'image' && (
+                  <>
+                    <span aria-hidden="true" className="text-[#5E5B54]">·</span>
+                    <span className="inline-flex items-center gap-1 text-violet-300 font-medium">
+                      <ImageIcon size={12} />
+                      Зображення
+                    </span>
+                  </>
+                )}
+                {mediaType === 'video' && (
+                  <>
+                    <span aria-hidden="true" className="text-[#5E5B54]">·</span>
+                    <span className="inline-flex items-center gap-1 text-amber-300 font-medium">
+                      <Film size={12} />
+                      Відео
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -249,7 +269,7 @@ export function ModelDetailsSheet({
           {/* Pricing Block */}
           <section aria-label="Вартість використання">
             <div className="text-xs font-medium text-[#8E8B83] mb-2.5">
-              Тарифікація токенів
+              {mediaType === 'text' ? 'Тарифікація токенів' : 'Тарифікація генерації'}
             </div>
 
             {pricing.mode === 'split' ? (
@@ -336,8 +356,20 @@ export function ModelDetailsSheet({
             onClick={() => onStartChat(renderedModel.apiModelId)}
             className="w-full min-h-[48px] py-3.5 px-5 bg-[#CC785C] hover:bg-[#D97757] text-white font-semibold rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2.5 active:scale-[0.98] text-[15px]"
           >
-            <MessageSquare size={18} />
-            <span>Почати чат з цією моделлю</span>
+            {mediaType === 'video' ? (
+              <Film size={18} />
+            ) : mediaType === 'image' ? (
+              <ImageIcon size={18} />
+            ) : (
+              <MessageSquare size={18} />
+            )}
+            <span>
+              {mediaType === 'video'
+                ? 'Створити відео з цією моделлю'
+                : mediaType === 'image'
+                ? 'Створити зображення з цією моделлю'
+                : 'Почати чат з цією моделлю'}
+            </span>
           </button>
         </div>
       </div>

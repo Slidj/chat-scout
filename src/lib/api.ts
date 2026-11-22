@@ -1,3 +1,6 @@
+import { MediaAttachment, ModelMediaType } from '../types';
+import { createTinyImageThumbnail, saveTempMediaBlob } from './mediaCache';
+
 const BASE_URLS = [
   'https://scout-ai.pp.ua/v1'
 ];
@@ -10,11 +13,14 @@ export interface Message {
   text: string;
   searchQueries?: string[];
   readUrls?: string[];
+  mediaItems?: MediaAttachment[];
 }
 
 export interface Model {
   id: string;
   name: string;
+  modelType?: ModelMediaType;
+  supportedEndpoints?: string[];
 }
 
 export interface ChatRequestOptions {
@@ -400,6 +406,57 @@ async function fetchWithFallback(path: string, options: RequestInit) {
   throw lastError || new Error("Сервер API тимчасово недоступний");
 }
 
+/**
+ * Infers whether a New API model is for text chat, image generation, or video generation.
+ * Respects explicit admin overrides first, then New API `supported_endpoint_types`, then model ID patterns.
+ */
+export function inferModelMediaType(
+  modelId: string,
+  explicitType?: ModelMediaType,
+  supportedEndpoints?: string[]
+): ModelMediaType {
+  if (explicitType === 'image' || explicitType === 'video' || explicitType === 'text') {
+    return explicitType;
+  }
+
+  const endpoints = Array.isArray(supportedEndpoints)
+    ? supportedEndpoints.map((e) => String(e).toLowerCase())
+    : [];
+
+  if (endpoints.length > 0) {
+    const hasVideoEndpoint = endpoints.some((e) =>
+      /(video|openai-video|kling|jimeng|vidu|sora|veo|runway|luma|minimax-video)/.test(e)
+    );
+    const hasImageEndpoint = endpoints.some((e) =>
+      /(image-generation|images|dall-e|midjourney|mj|flux)/.test(e)
+    );
+    const hasChatEndpoint = endpoints.some((e) =>
+      e === 'openai' || e === 'openai-response' || e === 'anthropic' || e === 'gemini'
+    );
+
+    if (hasVideoEndpoint && !hasChatEndpoint) return 'video';
+    if (hasImageEndpoint && !hasChatEndpoint) return 'image';
+  }
+
+  const id = (modelId || '').toLowerCase();
+  if (
+    /(sora|veo|kling|runway|gen-?[34]|luma|dream-?machine|pika|hailuo|minimax-?video|wanx?|seedance|vidu|jimeng|cogvideo|hunyuan-?video|grok-?(?:imagine-)?video)/i.test(
+      id
+    )
+  ) {
+    return 'video';
+  }
+  if (
+    /(dall-?e|gpt-image|gpt-4o-image|imagen|flux|sdxl|sd3|stable-diffusion|midjourney|mj-|ideogram|recraft|seedream|kolors|qwen-?image|grok-?2-?image|grok-?imagine|nano-?banana|gemini-[^/]*-image)/i.test(
+      id
+    )
+  ) {
+    return 'image';
+  }
+
+  return 'text';
+}
+
 export async function fetchModels(apiKey: string): Promise<Model[]> {
   try {
     const data = await fetchWithFallback('/models', {
@@ -411,10 +468,17 @@ export async function fetchModels(apiKey: string): Promise<Model[]> {
     });
     
     if (data && data.data) {
-      return data.data.map((m: any) => ({
-        id: m.id,
-        name: m.id
-      }));
+      return data.data.map((m: any) => {
+        const endpoints = Array.isArray(m.supported_endpoint_types)
+          ? m.supported_endpoint_types.map(String)
+          : undefined;
+        return {
+          id: m.id,
+          name: m.id,
+          supportedEndpoints: endpoints,
+          modelType: inferModelMediaType(m.id, undefined, endpoints)
+        };
+      });
     }
     return [];
   } catch (error) {
@@ -1382,6 +1446,427 @@ export async function generateChatResponse(
 
   options?.onStatusChange?.(null);
   throw new Error("Перевищено кількість викликів інструментів пошуку");
+}
+
+/**
+ * Helper to package a generated image or video URL / base64 into a Firestore-safe MediaAttachment.
+ * Heavy Base64 blobs are stored in IndexedDB (3-day TTL) while Firestore holds only a URL or tiny <65KB preview.
+ */
+async function buildSafeMediaAttachment(
+  rawSource: string,
+  type: 'image' | 'video',
+  prompt: string,
+  mimeHint?: string
+): Promise<MediaAttachment> {
+  const mediaId = `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const trimmed = (rawSource || '').trim();
+
+  if (trimmed.startsWith('data:') || (!/^https?:\/\//i.test(trimmed) && trimmed.length > 256)) {
+    const mime =
+      mimeHint ||
+      (trimmed.match(/^data:([^;]+);/i)?.[1]) ||
+      (type === 'video' ? 'video/mp4' : 'image/png');
+    const dataUrl = trimmed.startsWith('data:') ? trimmed : `data:${mime};base64,${trimmed}`;
+    const localRef = await saveTempMediaBlob(mediaId, dataUrl, mime);
+    const tinyThumb = type === 'image' ? await createTinyImageThumbnail(dataUrl) : null;
+
+    return {
+      id: mediaId,
+      type,
+      url: tinyThumb || '',
+      ...(localRef ? { localRef } : {}),
+      mimeType: mime,
+      prompt
+    };
+  }
+
+  return {
+    id: mediaId,
+    type,
+    url: trimmed,
+    mimeType: mimeHint || (type === 'video' ? 'video/mp4' : 'image/png'),
+    prompt
+  };
+}
+
+/**
+ * Extracts media URLs / base64 payloads from OpenAI / New API chat completion responses
+ * (used as fallback when image/video models are routed via /v1/chat/completions).
+ */
+async function extractMediaFromChatCompletionData(
+  data: any,
+  preferredType: 'image' | 'video',
+  prompt: string
+): Promise<{ text: string; mediaItems: MediaAttachment[] }> {
+  const choice = data?.choices?.[0];
+  const msg = choice?.message;
+  const mediaItems: MediaAttachment[] = [];
+  let text = '';
+
+  const rawContent = msg?.content ?? choice?.text ?? '';
+  if (typeof rawContent === 'string') {
+    text = rawContent;
+  } else if (Array.isArray(rawContent)) {
+    const textParts: string[] = [];
+    for (const part of rawContent) {
+      if (typeof part === 'string') {
+        textParts.push(part);
+      } else if (part?.type === 'text' && part.text) {
+        textParts.push(part.text);
+      } else if (part?.type === 'image_url' && part.image_url?.url) {
+        mediaItems.push(await buildSafeMediaAttachment(part.image_url.url, 'image', prompt));
+      } else if (part?.inline_data?.data) {
+        const mime = part.inline_data.mime_type || 'image/png';
+        mediaItems.push(
+          await buildSafeMediaAttachment(`data:${mime};base64,${part.inline_data.data}`, 'image', prompt, mime)
+        );
+      }
+    }
+    text = textParts.join('\n').trim();
+  }
+
+  // Some New API channels attach images/videos in `message.images` or `data.data`
+  const extraImages = msg?.images || data?.images;
+  if (Array.isArray(extraImages)) {
+    for (const img of extraImages) {
+      const url = typeof img === 'string' ? img : (img?.url || img?.image_url?.url || img?.b64_json);
+      if (url) {
+        mediaItems.push(await buildSafeMediaAttachment(url, 'image', prompt));
+      }
+    }
+  }
+
+  // Extract Markdown image tags ![alt](url) or direct media links from text
+  if (text) {
+    const mdImgRegex = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+    let m: RegExpExecArray | null;
+    while ((m = mdImgRegex.exec(text)) !== null) {
+      const src = m[2];
+      const isVid = /\.(mp4|webm|mov)(?:\?|$)/i.test(src) || preferredType === 'video';
+      mediaItems.push(await buildSafeMediaAttachment(src, isVid ? 'video' : 'image', prompt));
+    }
+    if (mediaItems.length > 0) {
+      text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '').trim();
+    }
+
+    // Extract raw data:image/ or direct .mp4/.webm URLs if no markdown tag was used
+    if (mediaItems.length === 0) {
+      const directMediaMatch =
+        text.match(/(data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)/i) ||
+        text.match(/(https?:\/\/[^\s"'<>]+\.(?:mp4|webm|mov|png|jpe?g|webp)(?:\?[^\s"'<>]*)?)/i);
+      if (directMediaMatch?.[1]) {
+        const foundUrl = directMediaMatch[1];
+        const isVid = /\.(mp4|webm|mov)(?:\?|$)/i.test(foundUrl) || preferredType === 'video';
+        mediaItems.push(await buildSafeMediaAttachment(foundUrl, isVid ? 'video' : 'image', prompt));
+        text = text.replace(foundUrl, '').trim();
+      }
+    }
+  }
+
+  return { text, mediaItems };
+}
+
+/**
+ * Generates an image via New API v1.0.0 (`POST /v1/images/generations`),
+ * automatically falling back to `/v1/chat/completions` for chat-wrapped image models (e.g. gemini-*-image).
+ */
+export async function generateMediaImage(
+  apiKey: string,
+  modelId: string,
+  prompt: string,
+  signal?: AbortSignal,
+  options?: { systemPrompt?: string; onStatusChange?: (status: string | null) => void }
+): Promise<{ text: string; mediaItems: MediaAttachment[] }> {
+  const baseUrl = BASE_URLS[0];
+  const effectivePrompt = options?.systemPrompt?.trim()
+    ? `${options.systemPrompt.trim()}\n\n${prompt.trim()}`
+    : prompt.trim();
+
+  options?.onStatusChange?.('Генерую зображення...');
+
+  const headers = {
+    'Authorization': `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  };
+
+  // 1. Primary: OpenAI / New API /v1/images/generations
+  const imgRes = await fetch(`${baseUrl}/images/generations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: modelId,
+      prompt: effectivePrompt,
+      n: 1
+    }),
+    signal
+  });
+
+  if (imgRes.status === 401) {
+    throw new Error('Невірний API ключ (помилка 401). Перевірте налаштування.');
+  }
+  if (imgRes.status === 402) {
+    throw new Error('Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.');
+  }
+
+  if (imgRes.ok) {
+    const data = await imgRes.json();
+    const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [data]);
+    const mediaItems: MediaAttachment[] = [];
+    const notes: string[] = [];
+
+    for (const item of list) {
+      const src = item?.url || item?.image_url || item?.b64_json;
+      if (src) {
+        mediaItems.push(await buildSafeMediaAttachment(src, 'image', prompt));
+      }
+      if (item?.revised_prompt && typeof item.revised_prompt === 'string') {
+        notes.push(item.revised_prompt);
+      }
+    }
+
+    if (mediaItems.length > 0) {
+      options?.onStatusChange?.(null);
+      return {
+        text: notes.length > 0 ? `*Промпт моделі:* ${notes[0]}` : '',
+        mediaItems
+      };
+    }
+  }
+
+  // Check if error is unrecoverable (401/402/429) vs endpoint mismatch (400/404/405/501)
+  let primaryErrData: any = null;
+  if (!imgRes.ok) {
+    try {
+      primaryErrData = await imgRes.json();
+    } catch {
+      primaryErrData = await imgRes.text().catch(() => '');
+    }
+    if (isRateLimitError(primaryErrData, imgRes.status)) {
+      throw new Error(formatApiError(primaryErrData, imgRes.status));
+    }
+  }
+
+  // 2. Fallback: chat-wrapped image generation models (e.g. gpt-4o-image / gemini-2.5-flash-image)
+  const chatRes = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: modelId,
+      messages: [{ role: 'user', content: effectivePrompt }],
+      stream: false
+    }),
+    signal
+  });
+
+  if (chatRes.ok) {
+    const chatData = await chatRes.json();
+    const extracted = await extractMediaFromChatCompletionData(chatData, 'image', prompt);
+    if (extracted.mediaItems.length > 0 || extracted.text) {
+      options?.onStatusChange?.(null);
+      return extracted;
+    }
+  }
+
+  options?.onStatusChange?.(null);
+  throw new Error(formatApiError(primaryErrData, imgRes.status) || 'Не вдалося згенерувати зображення');
+}
+
+/**
+ * Generates video via New API v1.0.0 async task endpoints:
+ * Primary: `POST /v1/video/generations` -> poll `GET /v1/video/generations/{task_id}`
+ * Secondary: `POST /v1/videos` -> poll `GET /v1/videos/{video_id}` (+ auth `/content` fetch fallback)
+ */
+export async function generateMediaVideo(
+  apiKey: string,
+  modelId: string,
+  prompt: string,
+  signal?: AbortSignal,
+  options?: { systemPrompt?: string; onStatusChange?: (status: string | null) => void }
+): Promise<{ text: string; mediaItems: MediaAttachment[] }> {
+  const baseUrl = BASE_URLS[0];
+  const effectivePrompt = options?.systemPrompt?.trim()
+    ? `${options.systemPrompt.trim()}\n\n${prompt.trim()}`
+    : prompt.trim();
+
+  const headers = {
+    'Authorization': `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  };
+
+  options?.onStatusChange?.('Надсилаю завдання на генерацію відео...');
+
+  let submitRoute: 'video/generations' | 'videos' = 'video/generations';
+  let submitRes = await fetch(`${baseUrl}/video/generations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model: modelId, prompt: effectivePrompt }),
+    signal
+  });
+
+  // If gateway routes OpenAI Sora-style /v1/videos instead of /v1/video/generations
+  if (submitRes.status === 404 || submitRes.status === 405 || submitRes.status === 501) {
+    submitRoute = 'videos';
+    submitRes = await fetch(`${baseUrl}/videos`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model: modelId, prompt: effectivePrompt }),
+      signal
+    });
+  }
+
+  if (submitRes.status === 401) {
+    throw new Error('Невірний API ключ (помилка 401). Перевірте налаштування.');
+  }
+  if (submitRes.status === 402) {
+    throw new Error('Недостатньо коштів на балансі (помилка 402). Поповніть рахунок.');
+  }
+
+  // Fallback for chat-wrapped video models if neither video endpoint matched
+  if (submitRes.status === 404 || submitRes.status === 405 || submitRes.status === 501) {
+    options?.onStatusChange?.('Генерую відео...');
+    const chatRes = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: modelId,
+        messages: [{ role: 'user', content: effectivePrompt }],
+        stream: false
+      }),
+      signal
+    });
+    if (chatRes.ok) {
+      const chatData = await chatRes.json();
+      const extracted = await extractMediaFromChatCompletionData(chatData, 'video', prompt);
+      if (extracted.mediaItems.length > 0 || extracted.text) {
+        options?.onStatusChange?.(null);
+        return extracted;
+      }
+    }
+  }
+
+  if (!submitRes.ok) {
+    let errData: any = null;
+    try {
+      errData = await submitRes.json();
+    } catch {
+      errData = await submitRes.text().catch(() => '');
+    }
+    options?.onStatusChange?.(null);
+    throw new Error(formatApiError(errData, submitRes.status));
+  }
+
+  const submitData = await submitRes.json();
+  const payloadObj = submitData?.data && typeof submitData.data === 'object' ? submitData.data : submitData;
+
+  const immediateUrl =
+    payloadObj?.url ||
+    payloadObj?.video_url ||
+    payloadObj?.output?.url ||
+    payloadObj?.result?.url;
+
+  if (immediateUrl && typeof immediateUrl === 'string') {
+    options?.onStatusChange?.(null);
+    const attachment = await buildSafeMediaAttachment(immediateUrl, 'video', prompt);
+    return { text: '', mediaItems: [attachment] };
+  }
+
+  const taskId = payloadObj?.task_id || payloadObj?.id || submitData?.task_id || submitData?.id;
+  if (!taskId) {
+    options?.onStatusChange?.(null);
+    throw new Error('Сервер не повернув ідентифікатор відео-завдання');
+  }
+
+  // Poll task status up to ~6 minutes (100 attempts x 3.5s)
+  const MAX_POLLS = 100;
+  for (let attempt = 0; attempt < MAX_POLLS; attempt++) {
+    await sleepWithAbort(attempt === 0 ? 2500 : 3500, signal);
+
+    const statusRes = await fetch(`${baseUrl}/${submitRoute}/${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal
+    });
+
+    if (!statusRes.ok) {
+      if (statusRes.status === 401 || statusRes.status === 402) {
+        throw new Error(formatApiError(null, statusRes.status));
+      }
+      continue;
+    }
+
+    const statusJson = await statusRes.json();
+    const taskObj = statusJson?.data && typeof statusJson.data === 'object' ? statusJson.data : statusJson;
+    const rawStatus = String(taskObj?.status || '').toLowerCase();
+    const progressStr = taskObj?.progress ? ` (${String(taskObj.progress).replace(/%+$/, '')}%)` : '';
+
+    if (rawStatus === 'failed' || rawStatus === 'error' || rawStatus === 'cancelled' || rawStatus === 'canceled') {
+      const reason =
+        taskObj?.error?.message ||
+        taskObj?.fail_reason ||
+        taskObj?.message ||
+        statusJson?.message ||
+        'Не вдалося згенерувати відео';
+      options?.onStatusChange?.(null);
+      throw new Error(typeof reason === 'string' ? reason : JSON.stringify(reason));
+    }
+
+    if (rawStatus === 'succeeded' || rawStatus === 'completed' || rawStatus === 'success' || rawStatus === 'done') {
+      const finalVideoUrl =
+        taskObj?.url ||
+        taskObj?.video_url ||
+        taskObj?.output?.url ||
+        taskObj?.result?.url ||
+        taskObj?.outputs?.[0]?.url ||
+        taskObj?.data?.url;
+
+      if (finalVideoUrl && typeof finalVideoUrl === 'string') {
+        options?.onStatusChange?.(null);
+        const attachment = await buildSafeMediaAttachment(finalVideoUrl, 'video', prompt);
+        return { text: '', mediaItems: [attachment] };
+      }
+
+      // OpenAI /v1/videos/{id}/content binary endpoint (requires Bearer header -> fetch to local IndexedDB Blob)
+      if (submitRoute === 'videos') {
+        options?.onStatusChange?.('Завантажую готове відео...');
+        const contentRes = await fetch(`${baseUrl}/videos/${encodeURIComponent(taskId)}/content`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+          signal
+        });
+        if (contentRes.ok) {
+          const videoBlob = await contentRes.blob();
+          const mediaId = `video_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+          const localRef = await saveTempMediaBlob(mediaId, videoBlob, videoBlob.type || 'video/mp4');
+          options?.onStatusChange?.(null);
+          return {
+            text: '',
+            mediaItems: [
+              {
+                id: mediaId,
+                type: 'video',
+                url: '',
+                localRef,
+                mimeType: videoBlob.type || 'video/mp4',
+                prompt
+              }
+            ]
+          };
+        }
+      }
+
+      options?.onStatusChange?.(null);
+      throw new Error('Відео готове, але сервер не повернув посилання на файл');
+    }
+
+    if (rawStatus === 'queued' || rawStatus === 'pending' || rawStatus === 'submitted') {
+      options?.onStatusChange?.(`Відео в черзі на рендеринг${progressStr}...`);
+    } else {
+      options?.onStatusChange?.(`Генерую відео${progressStr}...`);
+    }
+  }
+
+  options?.onStatusChange?.(null);
+  throw new Error('Перевищено час очікування генерації відео. Перевірте статус пізніше.');
 }
 
 /**

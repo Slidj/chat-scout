@@ -2,12 +2,19 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   ArrowUp, Sparkles, X, ChevronDown, Plus, Mic, MicOff, ArrowLeft, ArrowDown,
   Camera, Image as ImageIcon, FileText, FolderPlus, Globe, Paperclip, Clock,
-  Check, Square, History, Trash2, MessageSquare, Mail, Bot
+  Check, Square, History, Trash2, MessageSquare, Mail, Bot, Film
 } from 'lucide-react';
-import { Message, streamChatResponse, generateChatResponse } from '../lib/api';
-import { Agent } from '../types';
+import {
+  Message,
+  streamChatResponse,
+  generateMediaImage,
+  generateMediaVideo,
+  inferModelMediaType
+} from '../lib/api';
+import { Agent, ModelMediaType } from '../types';
 import { ChatMessage } from './ChatMessage';
 import { getTierClasses, getTierTextColor, resolveColorToHex } from '../lib/utils';
+import { cleanupExpiredMediaCache } from '../lib/mediaCache';
 import { 
   logQueryEvent, getOrInitClientId, 
   saveChatSession, subscribeUserChats, deleteChatSession, clearUserChats, 
@@ -18,6 +25,8 @@ export interface ChatModelOption {
   id: string;
   name: string;
   tier?: string;
+  modelType?: ModelMediaType;
+  supportedEndpoints?: string[];
   shortPriceInfo?: string;
   priceInfo?: string;
   providerName?: string;
@@ -134,10 +143,11 @@ export function ChatPanel({
 
   const activeModelObj = apiModels.find(m => m.id === selectedModel);
 
-  // Subscribe to user's saved chats & auto-clean expired ones in the background
+  // Subscribe to user's saved chats & auto-clean expired chats + temp local media in the background
   useEffect(() => {
-    // 1. Silent background pruning of chats older than 3 days
+    // 1. Silent background pruning of chats and cached media older than 3 days
     cleanupExpiredChats().catch(console.error);
+    cleanupExpiredMediaCache().catch(console.error);
 
     // 2. Real-time subscription to user's chats
     const unsubscribe = subscribeUserChats(currentUid, (chats) => {
@@ -166,6 +176,12 @@ export function ChatPanel({
   }, [activeChatId, activeAgent?.id, savedChats, isOpen]);
 
   const effectiveModel = activeAgent?.modelId || selectedModel || '';
+  const effectiveModelObj = apiModels.find(m => m.id === effectiveModel) || activeModelObj;
+  const effectiveModelType = inferModelMediaType(
+    effectiveModel,
+    effectiveModelObj?.modelType,
+    effectiveModelObj?.supportedEndpoints
+  );
 
   const persistChat = (msgs: Message[], customTitle?: string) => {
     if (msgs.length === 0) return;
@@ -451,47 +467,74 @@ export function ChatPanel({
     setToolStatus(null);
 
     try {
-      // Real-time token streaming with smooth fluid animation + Custom Agent System Prompt & Tool Calling
-      await streamChatResponse(
-        apiKey,
-        effectiveModel,
-        userText,
-        newHistory.slice(0, -1),
-        (_chunk, accumulated) => {
-          streamTargetRef.current = accumulated;
-          startFluidLoop(newModelId);
-        },
-        abortController.signal,
-        activeAgent
-          ? {
-              systemPrompt: activeAgent.systemPrompt,
-              webSearchEnabled: activeAgent.webSearchEnabled,
-              webReaderEnabled: !!activeAgent.webReaderEnabled,
-              searchUrl: activeAgent.searchUrl,
-              onStatusChange: (status) => setToolStatus(status),
-              onSearchQueries: (queries) => {
-                latestSearchQueries = queries;
-                setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, searchQueries: queries } : m));
-              },
-              onReadUrls: (urls) => {
-                latestReadUrls = urls;
-                setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, readUrls: urls } : m));
-              }
-            }
-          : undefined
-      );
+      let finalAssistantMessage: Message;
 
-      isStreamingActiveRef.current = false;
-      setToolStatus(null);
+      if (effectiveModelType === 'image' || effectiveModelType === 'video') {
+        const mediaResult = effectiveModelType === 'video'
+          ? await generateMediaVideo(apiKey, effectiveModel, userText, abortController.signal, {
+              systemPrompt: activeAgent?.systemPrompt,
+              onStatusChange: (status) => setToolStatus(status)
+            })
+          : await generateMediaImage(apiKey, effectiveModel, userText, abortController.signal, {
+              systemPrompt: activeAgent?.systemPrompt,
+              onStatusChange: (status) => setToolStatus(status)
+            });
+
+        isStreamingActiveRef.current = false;
+        setToolStatus(null);
+        setTypingMessageId(null);
+
+        finalAssistantMessage = {
+          id: newModelId,
+          role: 'model',
+          text: mediaResult.text || '',
+          ...(mediaResult.mediaItems.length > 0 ? { mediaItems: mediaResult.mediaItems } : {})
+        };
+        setMessages(prev => prev.map(m => m.id === newModelId ? finalAssistantMessage : m));
+      } else {
+        // Real-time token streaming with smooth fluid animation + Custom Agent System Prompt & Tool Calling
+        await streamChatResponse(
+          apiKey,
+          effectiveModel,
+          userText,
+          newHistory.slice(0, -1),
+          (_chunk, accumulated) => {
+            streamTargetRef.current = accumulated;
+            startFluidLoop(newModelId);
+          },
+          abortController.signal,
+          activeAgent
+            ? {
+                systemPrompt: activeAgent.systemPrompt,
+                webSearchEnabled: activeAgent.webSearchEnabled,
+                webReaderEnabled: !!activeAgent.webReaderEnabled,
+                searchUrl: activeAgent.searchUrl,
+                onStatusChange: (status) => setToolStatus(status),
+                onSearchQueries: (queries) => {
+                  latestSearchQueries = queries;
+                  setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, searchQueries: queries } : m));
+                },
+                onReadUrls: (urls) => {
+                  latestReadUrls = urls;
+                  setMessages(prev => prev.map(m => m.id === newModelId ? { ...m, readUrls: urls } : m));
+                }
+              }
+            : undefined
+        );
+
+        isStreamingActiveRef.current = false;
+        setToolStatus(null);
+
+        finalAssistantMessage = {
+          id: newModelId,
+          role: 'model',
+          text: streamTargetRef.current,
+          ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {}),
+          ...(latestReadUrls.length > 0 ? { readUrls: latestReadUrls } : {})
+        };
+      }
 
       // Persist completed chat response to Firestore
-      const finalAssistantMessage: Message = {
-        id: newModelId,
-        role: 'model',
-        text: streamTargetRef.current,
-        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {}),
-        ...(latestReadUrls.length > 0 ? { readUrls: latestReadUrls } : {})
-      };
       const finalHistory = [...newHistory, finalAssistantMessage];
       persistChat(finalHistory, chatTitle);
 
@@ -528,6 +571,7 @@ export function ChatPanel({
       });
 
       stopFluidLoop();
+      setTypingMessageId(null);
       const errorContent = `Помилка: ${error.message || 'Щось пішло не так при зверненні до API. Перевірте з\'єднання.'}`;
       setMessages(prev =>
         prev.map(m => m.id === newModelId
@@ -594,45 +638,72 @@ export function ChatPanel({
     setToolStatus(null);
 
     try {
-      await streamChatResponse(
-        apiKey,
-        effectiveModel,
-        lastUserMessage.text,
-        historyWithoutLast.slice(0, -1),
-        (_chunk, accumulated) => {
-          streamTargetRef.current = accumulated;
-          startFluidLoop(modelId);
-        },
-        abortController.signal,
-        activeAgent
-          ? {
-              systemPrompt: activeAgent.systemPrompt,
-              webSearchEnabled: activeAgent.webSearchEnabled,
-              webReaderEnabled: !!activeAgent.webReaderEnabled,
-              searchUrl: activeAgent.searchUrl,
-              onStatusChange: (status) => setToolStatus(status),
-              onSearchQueries: (queries) => {
-                latestSearchQueries = queries;
-                setMessages(prev => prev.map(m => m.id === modelId ? { ...m, searchQueries: queries } : m));
-              },
-              onReadUrls: (urls) => {
-                latestReadUrls = urls;
-                setMessages(prev => prev.map(m => m.id === modelId ? { ...m, readUrls: urls } : m));
+      let finalAssistantMessage: Message;
+
+      if (effectiveModelType === 'image' || effectiveModelType === 'video') {
+        const mediaResult = effectiveModelType === 'video'
+          ? await generateMediaVideo(apiKey, effectiveModel, lastUserMessage.text, abortController.signal, {
+              systemPrompt: activeAgent?.systemPrompt,
+              onStatusChange: (status) => setToolStatus(status)
+            })
+          : await generateMediaImage(apiKey, effectiveModel, lastUserMessage.text, abortController.signal, {
+              systemPrompt: activeAgent?.systemPrompt,
+              onStatusChange: (status) => setToolStatus(status)
+            });
+
+        isStreamingActiveRef.current = false;
+        setToolStatus(null);
+        setTypingMessageId(null);
+
+        finalAssistantMessage = {
+          id: modelId,
+          role: 'model',
+          text: mediaResult.text || '',
+          ...(mediaResult.mediaItems.length > 0 ? { mediaItems: mediaResult.mediaItems } : {})
+        };
+        setMessages(prev => prev.map(m => m.id === modelId ? finalAssistantMessage : m));
+      } else {
+        await streamChatResponse(
+          apiKey,
+          effectiveModel,
+          lastUserMessage.text,
+          historyWithoutLast.slice(0, -1),
+          (_chunk, accumulated) => {
+            streamTargetRef.current = accumulated;
+            startFluidLoop(modelId);
+          },
+          abortController.signal,
+          activeAgent
+            ? {
+                systemPrompt: activeAgent.systemPrompt,
+                webSearchEnabled: activeAgent.webSearchEnabled,
+                webReaderEnabled: !!activeAgent.webReaderEnabled,
+                searchUrl: activeAgent.searchUrl,
+                onStatusChange: (status) => setToolStatus(status),
+                onSearchQueries: (queries) => {
+                  latestSearchQueries = queries;
+                  setMessages(prev => prev.map(m => m.id === modelId ? { ...m, searchQueries: queries } : m));
+                },
+                onReadUrls: (urls) => {
+                  latestReadUrls = urls;
+                  setMessages(prev => prev.map(m => m.id === modelId ? { ...m, readUrls: urls } : m));
+                }
               }
-            }
-          : undefined
-      );
+            : undefined
+        );
 
-      isStreamingActiveRef.current = false;
-      setToolStatus(null);
+        isStreamingActiveRef.current = false;
+        setToolStatus(null);
 
-      const finalAssistantMessage: Message = {
-        id: modelId,
-        role: 'model',
-        text: streamTargetRef.current,
-        ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {}),
-        ...(latestReadUrls.length > 0 ? { readUrls: latestReadUrls } : {})
-      };
+        finalAssistantMessage = {
+          id: modelId,
+          role: 'model',
+          text: streamTargetRef.current,
+          ...(latestSearchQueries.length > 0 ? { searchQueries: latestSearchQueries } : {}),
+          ...(latestReadUrls.length > 0 ? { readUrls: latestReadUrls } : {})
+        };
+      }
+
       persistChat([...historyWithoutLast, finalAssistantMessage]);
 
       const durationMs = Date.now() - startTime;
@@ -652,6 +723,7 @@ export function ChatPanel({
       setToolStatus(null);
       if (error.name === 'AbortError') return;
       stopFluidLoop();
+      setTypingMessageId(null);
       const retryErrorText = `Помилка: ${error.message || 'Не вдалося повторити відповідь'}`;
       setMessages(prev =>
         prev.map(m => m.id === modelId
@@ -965,8 +1037,26 @@ export function ChatPanel({
                   <Bot size={30} />
                 </div>
                 <div>
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#292723] border border-[#3C3933] text-[10px] font-semibold uppercase tracking-wider text-[#CC785C] mb-1.5">
+                  <div className="inline-flex flex-wrap items-center justify-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#292723] border border-[#3C3933] text-[10px] font-semibold uppercase tracking-wider text-[#CC785C] mb-1.5">
                     <span>Кастомний Агент</span>
+                    {effectiveModelType === 'image' && (
+                      <>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-violet-300">
+                          <ImageIcon size={10} />
+                          Зображення
+                        </span>
+                      </>
+                    )}
+                    {effectiveModelType === 'video' && (
+                      <>
+                        <span>•</span>
+                        <span className="inline-flex items-center gap-1 text-amber-300">
+                          <Film size={10} />
+                          Відео
+                        </span>
+                      </>
+                    )}
                     {activeAgent.webSearchEnabled && (
                       <>
                         <span>•</span>
@@ -1014,11 +1104,27 @@ export function ChatPanel({
                   </div>
                 ) : (
                   <div className="w-14 h-14 rounded-2xl bg-[#282723] text-[#CC785C] flex items-center justify-center mb-4 border border-[#3A3834]">
-                    <Sparkles size={26} />
+                    {effectiveModelType === 'video' ? (
+                      <Film size={26} />
+                    ) : effectiveModelType === 'image' ? (
+                      <ImageIcon size={26} />
+                    ) : (
+                      <Sparkles size={26} />
+                    )}
                   </div>
                 )}
+                {effectiveModelType !== 'text' && (
+                  <span className="mb-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#292723] border border-[#3C3933] text-[11px] font-medium text-[#CC785C]">
+                    {effectiveModelType === 'video' ? <Film size={12} /> : <ImageIcon size={12} />}
+                    <span>{effectiveModelType === 'video' ? 'Генерація відео' : 'Генерація зображень'}</span>
+                  </span>
+                )}
                 <h2 className="font-claude-serif text-3xl font-normal text-[#EDE9DF] tracking-tight">
-                  Чим можу допомогти?
+                  {effectiveModelType === 'video'
+                    ? 'Яке відео створити?'
+                    : effectiveModelType === 'image'
+                    ? 'Що намалювати?'
+                    : 'Чим можу допомогти?'}
                 </h2>
               </>
             )}
@@ -1134,9 +1240,13 @@ export function ChatPanel({
                 placeholder={
                   isListening
                     ? 'Слухаю вас...'
-                    : activeAgent
-                      ? `Напишіть ${activeAgent.name}...`
-                      : 'Введіть повідомлення...'
+                    : effectiveModelType === 'video'
+                      ? 'Опишіть сцену для відео...'
+                      : effectiveModelType === 'image'
+                        ? 'Опишіть зображення...'
+                        : activeAgent
+                          ? `Напишіть ${activeAgent.name}...`
+                          : 'Введіть повідомлення...'
                 }
                 disabled={!apiKey || !effectiveModel || isLoading}
                 className={`flex-1 min-w-0 bg-transparent text-[#EDE9DF] placeholder-[#8A867E] focus:outline-none resize-none transition-[padding,font-size] duration-200 motion-reduce:transition-none ${
@@ -1260,46 +1370,61 @@ export function ChatPanel({
                             <div className="px-3 py-1.5 text-[11px] font-semibold text-[#8A8780] uppercase tracking-wider">
                               Доступні моделі
                             </div>
-                            {apiModels.map(m => (
-                              <div
-                                key={m.id}
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => {
-                                  onChangeModel(m.id);
-                                  setIsDropdownOpen(false);
-                                }}
-                                className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
-                                  m.id === selectedModel
-                                    ? 'bg-[#33312D] text-white'
-                                    : 'hover:bg-[#2C2A26] text-[#EDE9DF]'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2 min-w-0 pr-2">
-                                  {m.providerLogoUrl ? (
-                                    <div
-                                      style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
-                                      className="w-5 h-5 rounded-md flex items-center justify-center shrink-0 overflow-hidden shadow-2xs"
-                                    >
-                                      <img src={m.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
-                                    </div>
-                                  ) : (
-                                    <span
-                                      className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
-                                      style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
-                                    />
-                                  )}
-                                  <span className={`font-medium truncate ${getTierTextColor(m.tier)}`}>{m.name}</span>
+                            {apiModels.map(m => {
+                              const mMediaType = inferModelMediaType(m.id, m.modelType, m.supportedEndpoints);
+                              return (
+                                <div
+                                  key={m.id}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    onChangeModel(m.id);
+                                    setIsDropdownOpen(false);
+                                  }}
+                                  className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
+                                    m.id === selectedModel
+                                      ? 'bg-[#33312D] text-white'
+                                      : 'hover:bg-[#2C2A26] text-[#EDE9DF]'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0 pr-2">
+                                    {m.providerLogoUrl ? (
+                                      <div
+                                        style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
+                                        className="w-5 h-5 rounded-md flex items-center justify-center shrink-0 overflow-hidden shadow-2xs"
+                                      >
+                                        <img src={m.providerLogoUrl} alt="" className="w-full h-full object-contain p-0.5" />
+                                      </div>
+                                    ) : (
+                                      <span
+                                        className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
+                                        style={{ backgroundColor: resolveColorToHex(m.providerColor) }}
+                                      />
+                                    )}
+                                    <span className={`font-medium truncate ${getTierTextColor(m.tier)}`}>{m.name}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {mMediaType === 'image' && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9.5px] font-medium text-violet-300 bg-violet-950/60 px-1.5 py-0.5 rounded border border-violet-800/40">
+                                        <ImageIcon size={9} />
+                                        Фото
+                                      </span>
+                                    )}
+                                    {mMediaType === 'video' && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9.5px] font-medium text-amber-300 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40">
+                                        <Film size={9} />
+                                        Відео
+                                      </span>
+                                    )}
+                                    {m.shortPriceInfo && (
+                                      <span className="text-[10px] font-medium text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
+                                        {m.shortPriceInfo.replace(/\//g, '-')}
+                                      </span>
+                                    )}
+                                    {m.id === selectedModel && <Check size={14} className="text-[#CC785C]" />}
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {m.shortPriceInfo && (
-                                    <span className="text-[10px] font-medium text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-800/40">
-                                      {m.shortPriceInfo.replace(/\//g, '-')}
-                                    </span>
-                                  )}
-                                  {m.id === selectedModel && <Check size={14} className="text-[#CC785C]" />}
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>

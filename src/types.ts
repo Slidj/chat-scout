@@ -1,3 +1,14 @@
+export type ModelMediaType = 'text' | 'image' | 'video';
+
+export interface MediaAttachment {
+  id: string;
+  type: 'image' | 'video';
+  url: string;
+  localRef?: string;
+  mimeType?: string;
+  prompt?: string;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -15,6 +26,7 @@ export interface AiModel {
   shortPriceInfo?: string;
   apiModelId: string; // The actual ID to send to the Scout AI API
   tier?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+  modelType?: ModelMediaType;
 }
 
 export interface Agent {
@@ -31,4 +43,3 @@ export interface Agent {
   updatedAt?: string;
   createdBy?: string;
 }
-

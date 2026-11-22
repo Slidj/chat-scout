@@ -3,7 +3,7 @@ import {
   Menu, Settings, MessageSquare, ChevronLeft, Shield, Key, Search,
   Plus, Layers, Cpu, Sparkles, X, Filter, SlidersHorizontal, ArrowRight,
   Wallet, Mail, Gift, CreditCard, Trash2, Bot, Globe, FileText, RefreshCw,
-  Home, ChevronRight
+  Home, ChevronRight, Image as ImageIcon, Film
 } from 'lucide-react';
 import { SettingsModal } from './components/SettingsModal';
 import { ChatPanel } from './components/ChatPanel';
@@ -13,7 +13,7 @@ import { CouponCardModal } from './components/CouponCardModal';
 import { AppPreloader } from './components/AppPreloader';
 import { ModelDetailsSheet } from './components/ModelDetailsSheet';
 import { Provider, AiModel, Agent } from './types';
-import { fetchModels, fetchApiBalance, ApiBalanceInfo, Model } from './lib/api';
+import { fetchModels, fetchApiBalance, ApiBalanceInfo, Model, inferModelMediaType } from './lib/api';
 import { 
   getProviders, getModels, trackUserSession, subscribeToCurrentUser, getOrInitClientId,
   TopupRequest, UserCoupon, subscribeUserCoupons, subscribeToTopups,
@@ -401,10 +401,13 @@ export default function App() {
         .filter(m => !apiKey || apiModels.length === 0 || apiModels.some(am => am.id === m.apiModelId))
         .map(m => {
           const prov = providers.find(p => p.id === m.providerId);
+          const amMatch = apiModels.find(am => am.id === m.apiModelId);
           return {
             id: m.apiModelId,
             name: m.name,
             tier: m.tier,
+            modelType: m.modelType || amMatch?.modelType,
+            supportedEndpoints: amMatch?.supportedEndpoints,
             shortPriceInfo: m.shortPriceInfo,
             priceInfo: m.priceInfo,
             providerName: prov?.name,
@@ -412,7 +415,13 @@ export default function App() {
             providerLogoUrl: prov?.logoUrl,
           };
         })
-    : apiModels.map(am => ({ id: am.id, name: am.name, tier: 'common' }));
+    : apiModels.map(am => ({
+        id: am.id,
+        name: am.name,
+        tier: 'common',
+        modelType: am.modelType,
+        supportedEndpoints: am.supportedEndpoints,
+      }));
 
   return (
     <div className="min-h-screen bg-[#171614] text-[#ECE8E1] font-sans pb-24 selection:bg-[#CC785C]/30 selection:text-white">
@@ -661,6 +670,13 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                     {filteredAgents.map(agent => {
                       const hexColor = resolveColorToHex(agent.color || '#CC785C');
+                      const catalogMatch = models.find(cm => cm.apiModelId === agent.modelId);
+                      const apiMatch = apiModels.find(am => am.id === agent.modelId);
+                      const agentMediaType = inferModelMediaType(
+                        agent.modelId,
+                        catalogMatch?.modelType || apiMatch?.modelType,
+                        apiMatch?.supportedEndpoints
+                      );
                       return (
                         <div
                           key={agent.id}
@@ -687,6 +703,18 @@ export default function App() {
                               </div>
 
                               <div className="flex flex-col items-end gap-1 shrink-0">
+                                {agentMediaType === 'image' && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-950/60 border border-violet-800/40 text-[10px] font-semibold text-violet-300">
+                                    <ImageIcon size={10} />
+                                    <span>Фото</span>
+                                  </span>
+                                )}
+                                {agentMediaType === 'video' && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-800/40 text-[10px] font-semibold text-amber-300">
+                                    <Film size={10} />
+                                    <span>Відео</span>
+                                  </span>
+                                )}
                                 {agent.webSearchEnabled && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-[10px] font-semibold text-emerald-300">
                                     <Globe size={10} />
@@ -709,7 +737,11 @@ export default function App() {
 
                           <div className="pt-2.5 border-t border-[#312F2B] flex items-center justify-between text-xs">
                             <span className="text-[#7E7B74]">
-                              {agent.webSearchEnabled && agent.webReaderEnabled
+                              {agentMediaType === 'video'
+                                ? 'Генерація відео'
+                                : agentMediaType === 'image'
+                                ? 'Генерація зображень'
+                                : agent.webSearchEnabled && agent.webReaderEnabled
                                 ? 'Веб-пошук і читання сторінок'
                                 : agent.webSearchEnabled
                                 ? 'Підтримує веб-пошук'
@@ -735,6 +767,8 @@ export default function App() {
               <div className="space-y-3">
                 {filteredModels.map(model => {
                   const prov = providers.find(p => p.id === model.providerId);
+                  const amMatch = apiModels.find(am => am.id === model.apiModelId);
+                  const mediaType = inferModelMediaType(model.apiModelId, model.modelType || amMatch?.modelType, amMatch?.supportedEndpoints);
                   return (
                     <div 
                       key={model.id}
@@ -755,7 +789,21 @@ export default function App() {
                           </div>
                         ) : null}
                         <div className="min-w-0">
-                          <h3 className={`font-semibold text-sm ${getTierTextColor(model.tier)}`}>{model.name}</h3>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <h3 className={`font-semibold text-sm truncate ${getTierTextColor(model.tier)}`}>{model.name}</h3>
+                            {mediaType === 'image' && (
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-violet-300 bg-violet-950/60 px-1.5 py-0.5 rounded border border-violet-800/40 shrink-0">
+                                <ImageIcon size={10} />
+                                Фото
+                              </span>
+                            )}
+                            {mediaType === 'video' && (
+                              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-300 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40 shrink-0">
+                                <Film size={10} />
+                                Відео
+                              </span>
+                            )}
+                          </div>
                           <p className={`text-xs mt-0.5 truncate ${getTierSubtextColor(model.tier)}`}>{prov?.name}</p>
                         </div>
                       </div>
@@ -806,26 +854,44 @@ export default function App() {
             <div className="space-y-3">
               {models
                 .filter(m => m.providerId === selectedProvider.id)
-                .map(model => (
-                <div 
-                  key={model.id}
-                  onClick={() => openModelDetails(model)}
-                  className={`rounded-2xl cursor-pointer transition-all flex overflow-hidden relative border ${getTierClasses(model.tier)}`}
-                >
-                  {!isChatOpen && model.tier && model.tier !== 'common' && (
-                    <div className="stars-container opacity-40"></div>
-                  )}
-                  <div className="p-3.5 flex-1 relative z-10">
-                    <h3 className={`font-semibold text-sm ${getTierTextColor(model.tier)}`}>{model.name}</h3>
-                    <p className={`text-xs mt-0.5 line-clamp-1 ${getTierSubtextColor(model.tier)}`}>{model.description}</p>
-                  </div>
-                  <div className="px-4 flex items-center justify-center shrink-0 relative z-10 border-l border-[#33312D]/60 bg-[#1D1C19]/40">
-                    <span className="text-xs font-semibold text-emerald-400 whitespace-nowrap">
-                      {model.shortPriceInfo ? model.shortPriceInfo.replace(/\//g, '-') : model.priceInfo}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                .map(model => {
+                  const amMatch = apiModels.find(am => am.id === model.apiModelId);
+                  const mediaType = inferModelMediaType(model.apiModelId, model.modelType || amMatch?.modelType, amMatch?.supportedEndpoints);
+                  return (
+                    <div 
+                      key={model.id}
+                      onClick={() => openModelDetails(model)}
+                      className={`rounded-2xl cursor-pointer transition-all flex overflow-hidden relative border ${getTierClasses(model.tier)}`}
+                    >
+                      {!isChatOpen && model.tier && model.tier !== 'common' && (
+                        <div className="stars-container opacity-40"></div>
+                      )}
+                      <div className="p-3.5 flex-1 relative z-10">
+                        <div className="flex items-center gap-1.5">
+                          <h3 className={`font-semibold text-sm ${getTierTextColor(model.tier)}`}>{model.name}</h3>
+                          {mediaType === 'image' && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-violet-300 bg-violet-950/60 px-1.5 py-0.5 rounded border border-violet-800/40 shrink-0">
+                              <ImageIcon size={10} />
+                              Фото
+                            </span>
+                          )}
+                          {mediaType === 'video' && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-300 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40 shrink-0">
+                              <Film size={10} />
+                              Відео
+                            </span>
+                          )}
+                        </div>
+                        <p className={`text-xs mt-0.5 line-clamp-1 ${getTierSubtextColor(model.tier)}`}>{model.description}</p>
+                      </div>
+                      <div className="px-4 flex items-center justify-center shrink-0 relative z-10 border-l border-[#33312D]/60 bg-[#1D1C19]/40">
+                        <span className="text-xs font-semibold text-emerald-400 whitespace-nowrap">
+                          {model.shortPriceInfo ? model.shortPriceInfo.replace(/\//g, '-') : model.priceInfo}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           </div>
         )}

@@ -11,9 +11,9 @@ import {
   subscribeToAgents, saveAgent, updateAgent, deleteAgent, DEFAULT_AGENT_SEARCH_URL,
   MAX_ACTIVITY_LOG_ENTRIES
 } from '../lib/db';
-import { fetchModels, resolveMediaLink } from '../lib/api';
+import { fetchModels, resolveMediaLink, inferModelMediaType, Model } from '../lib/api';
 import { buildActivityChartData, ChartBucket, ChartTimeframe } from '../lib/analytics';
-import { Provider, AiModel, Agent } from '../types';
+import { Provider, AiModel, Agent, ModelMediaType } from '../types';
 import { AppPreloader } from './AppPreloader';
 import { 
   Plus, Edit2, Edit3, Trash2, X, Upload, Check, Palette, Shield, 
@@ -32,7 +32,7 @@ type DrillDownModal = null | 'all_users' | 'active_today' | 'queries_detail' | '
 
 interface AdminPanelProps {
   onClose: () => void;
-  apiModels?: { id: string; name: string }[];
+  apiModels?: Model[];
   currentUser?: any;
 }
 
@@ -109,7 +109,7 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
   // API Key State
   const [adminApiKey, setAdminApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [adminApiModels, setAdminApiModels] = useState<{ id: string; name: string }[]>(apiModels);
+  const [adminApiModels, setAdminApiModels] = useState<Model[]>(apiModels);
   const [isTestingKey, setIsTestingKey] = useState(false);
   const [keyStatusMessage, setKeyStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -1785,6 +1785,8 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                     const prov = providers.find(p => p.id === m.providerId);
                     const provColor = prov ? resolveColorToHex(prov.color) : '#CC785C';
                     const tierClasses = getTierClasses(m.tier || 'common');
+                    const amMatch = adminApiModels.find(am => am.id === m.apiModelId);
+                    const mediaType = inferModelMediaType(m.apiModelId, m.modelType, amMatch?.supportedEndpoints);
 
                     return (
                       <div 
@@ -1805,6 +1807,19 @@ export function AdminPanel({ onClose, apiModels = [], currentUser }: AdminPanelP
                             <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${tierClasses}`}>
                               {m.tier || 'Common'}
                             </span>
+
+                            {mediaType === 'image' && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-violet-950/60 border border-violet-800/40 text-violet-300">
+                                <ImageIcon size={11} />
+                                Фото
+                              </span>
+                            )}
+                            {mediaType === 'video' && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-amber-950/60 border border-amber-800/40 text-amber-300">
+                                <Film size={11} />
+                                Відео
+                              </span>
+                            )}
                           </div>
 
                           <div className="text-xs text-[#8E8B83] flex flex-wrap items-center gap-2 font-mono mt-1">
@@ -4547,13 +4562,18 @@ function ProviderFormModal({ provider, onClose, onSave }: any) {
 // Model Form Modal
 // -------------------------------------------------------------
 function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
+  const initialApiId = model?.apiModelId || (apiModels && apiModels.length > 0 ? apiModels[0].id : '');
+  const initialApiMatch = (apiModels || []).find((m: Model) => m.id === initialApiId);
   const [name, setName] = useState(model?.name || '');
   const [desc, setDesc] = useState(model?.description || '');
-  const [apiId, setApiId] = useState(model?.apiModelId || (apiModels && apiModels.length > 0 ? apiModels[0].id : ''));
+  const [apiId, setApiId] = useState(initialApiId);
   const [price, setPrice] = useState(model?.priceInfo || '');
   const [shortPrice, setShortPrice] = useState(model?.shortPriceInfo || '');
   const [providerId, setProviderId] = useState(model?.providerId || (providers[0]?.id || ''));
   const [tier, setTier] = useState(model?.tier || 'common');
+  const [modelType, setModelType] = useState<ModelMediaType>(
+    model?.modelType || inferModelMediaType(initialApiId, undefined, initialApiMatch?.supportedEndpoints)
+  );
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 overflow-y-auto">
@@ -4594,12 +4614,13 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
               onChange={e => {
                 const val = e.target.value;
                 setApiId(val);
-                const found = apiModels.find((m: any) => m.id === val);
+                const found = apiModels.find((m: Model) => m.id === val);
                 if (found && !name) setName(found.name);
+                setModelType(inferModelMediaType(val, found?.modelType, found?.supportedEndpoints));
               }}
             >
               <option value="" disabled>Оберіть модель зі списку доступних</option>
-              {apiModels.map((m: any) => (
+              {apiModels.map((m: Model) => (
                 <option key={m.id} value={m.id}>{m.name} ({m.id})</option>
               ))}
             </select>
@@ -4611,9 +4632,15 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
             </label>
             <input 
               className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
-              placeholder="API ID (напр. gpt-4o або anthropic/claude-3.5-sonnet)" 
+              placeholder="API ID (напр. gpt-4o, flux-pro, sora-2)" 
               value={apiId} 
-              onChange={e=>setApiId(e.target.value)} 
+              onChange={e => {
+                const val = e.target.value;
+                setApiId(val);
+                if (!model) {
+                  setModelType(inferModelMediaType(val));
+                }
+              }} 
             />
           </div>
         )}
@@ -4624,10 +4651,39 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
           </label>
           <input 
             className="w-full p-2.5 text-sm border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]" 
-            placeholder="Назва (напр. GPT-4o, Claude 3.5 Sonnet)" 
+            placeholder="Назва (напр. GPT-4o, Flux Pro, Sora 2)" 
             value={name} 
             onChange={e=>setName(e.target.value)} 
           />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-[#9E9A92] uppercase tracking-wider mb-1.5">
+            Тип генерації (New API маршрут)
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {(
+              [
+                { id: 'text', label: 'Текст', icon: <Bot size={14} /> },
+                { id: 'image', label: 'Зображення', icon: <ImageIcon size={14} /> },
+                { id: 'video', label: 'Відео', icon: <Film size={14} /> }
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setModelType(opt.id)}
+                className={`py-2 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5 transition-all ${
+                  modelType === opt.id
+                    ? 'bg-[#CC785C]/20 border-[#CC785C] text-[#FAF8F5] shadow-xs'
+                    : 'bg-[#1B1A17] border-[#383632] text-[#9E9A92] hover:text-[#ECE8E1]'
+                }`}
+              >
+                {opt.icon}
+                <span>{opt.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -4697,7 +4753,7 @@ function ModelFormModal({ model, providers, apiModels, onClose, onSave }: any) {
           <button 
             type="button"
             disabled={!name.trim() || !apiId.trim()}
-            onClick={() => onSave({ name: name.trim(), description: desc.trim(), apiModelId: apiId.trim(), priceInfo: price.trim(), shortPriceInfo: shortPrice.trim(), providerId, tier })} 
+            onClick={() => onSave({ name: name.trim(), description: desc.trim(), apiModelId: apiId.trim(), priceInfo: price.trim(), shortPriceInfo: shortPrice.trim(), providerId, tier, modelType })} 
             className="px-5 py-2.5 text-sm font-semibold bg-[#CC785C] hover:bg-[#D97757] disabled:opacity-50 text-white rounded-xl shadow-md transition-colors"
           >
             Зберегти
@@ -4722,7 +4778,7 @@ function AgentFormModal({
   onSave
 }: {
   agent: Agent | null;
-  apiModels: { id: string; name: string }[];
+  apiModels: Model[];
   catalogModels: AiModel[];
   adminApiKey: string;
   onRefreshApiModels: () => Promise<void>;
@@ -4897,10 +4953,37 @@ function AgentFormModal({
               type="text"
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
-              placeholder="Напр. gpt-4o, gemini-2.5-flash, claude-3.5-sonnet"
+              placeholder="Напр. gpt-4o, flux-pro, sora-2, claude-3.5-sonnet"
               className="w-full p-2.5 text-sm font-mono border border-[#383632] bg-[#1B1A17] text-[#ECE8E1] placeholder-[#76736C] rounded-xl focus:outline-none focus:border-[#CC785C]"
             />
           )}
+
+          {(() => {
+            const catMatch = catalogModels.find(cm => cm.apiModelId === modelId);
+            const apiMatch = apiModels.find(am => am.id === modelId);
+            const detectedType = inferModelMediaType(
+              modelId,
+              catMatch?.modelType || apiMatch?.modelType,
+              apiMatch?.supportedEndpoints
+            );
+            if (detectedType === 'image') {
+              return (
+                <div className="mt-2 px-3 py-2 rounded-xl bg-violet-950/40 border border-violet-800/40 text-[11px] text-violet-200 flex items-center gap-2">
+                  <ImageIcon size={13} className="text-violet-300 shrink-0" />
+                  <span>Графічна модель: агент автоматично генеруватиме зображення через New API (системний промпт додається як стиль/інструкція).</span>
+                </div>
+              );
+            }
+            if (detectedType === 'video') {
+              return (
+                <div className="mt-2 px-3 py-2 rounded-xl bg-amber-950/40 border border-amber-800/40 text-[11px] text-amber-200 flex items-center gap-2">
+                  <Film size={13} className="text-amber-300 shrink-0" />
+                  <span>Відео-модель: агент автоматично запускатиме асинхронний рендеринг відео з прогресом у реальному часі.</span>
+                </div>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         {/* System Prompt */}

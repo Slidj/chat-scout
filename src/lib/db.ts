@@ -528,6 +528,42 @@ export const CHAT_RETENTION_DAYS = 3;
 export const CHAT_RETENTION_MS = CHAT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 /**
+ * Strips any oversized inline base64 data (>120KB) from messages before writing to Firestore
+ * so documents always stay safely below Firestore's 1MB limit while keeping URLs and tiny thumbnails.
+ */
+function sanitizeMessagesForFirestore(messages: any[]): any[] {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((msg) => {
+    if (!msg || typeof msg !== 'object') return msg;
+    let safeText = typeof msg.text === 'string' ? msg.text : '';
+    // Strip accidental huge inline data:image/video base64 blocks in raw markdown text
+    if (safeText.length > 80000 && /data:(?:image|video)\/[^;]+;base64,/i.test(safeText)) {
+      safeText = safeText.replace(/!\[([^\]]*)\]\(data:(?:image|video)\/[^)]+\)/gi, '[$1: збережено локально]');
+      safeText = safeText.replace(/data:(?:image|video)\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]{1000,}/gi, '[медіа збережено локально]');
+    }
+
+    const safeMediaItems = Array.isArray(msg.mediaItems)
+      ? msg.mediaItems.map((item: any) => {
+          if (!item || typeof item !== 'object') return item;
+          const urlStr = typeof item.url === 'string' ? item.url : '';
+          // Drop oversized data URLs from Firestore doc (full version lives in IndexedDB via localRef)
+          const safeUrl = urlStr.startsWith('data:') && urlStr.length > 90000 ? '' : urlStr;
+          return {
+            ...item,
+            url: safeUrl
+          };
+        })
+      : undefined;
+
+    return {
+      ...msg,
+      text: safeText,
+      ...(safeMediaItems ? { mediaItems: safeMediaItems } : {})
+    };
+  });
+}
+
+/**
  * Saves or updates a chat session in Firestore.
  * Automatically sets expiresAt to 3 days from the latest activity.
  */
@@ -537,6 +573,7 @@ export const saveChatSession = async (session: Omit<ChatSession, 'expiresAt'>): 
     const chatRef = doc(db, 'chats', session.id);
     const payload = sanitizeForFirestore({
       ...session,
+      messages: sanitizeMessagesForFirestore(session.messages),
       expiresAt
     });
     await setDoc(chatRef, payload, { merge: true });

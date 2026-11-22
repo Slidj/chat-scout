@@ -1,6 +1,12 @@
-import { memo, useState } from 'react';
-import { Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw, AlertTriangle, Globe, FileText } from 'lucide-react';
+import { memo, useEffect, useState } from 'react';
+import {
+  Copy, Check, Share2, Volume2, ThumbsUp, ThumbsDown, RotateCcw,
+  AlertTriangle, Globe, FileText, Download, Maximize2, X, Film,
+  Image as ImageIcon, AlertCircle
+} from 'lucide-react';
 import { Message } from '../lib/api';
+import { MediaAttachment } from '../types';
+import { downloadMediaAsset, getTempMediaObjectUrl } from '../lib/mediaCache';
 import { MarkdownContent } from './MarkdownContent';
 
 interface ChatMessageProps {
@@ -12,20 +18,156 @@ interface ChatMessageProps {
   toolStatus?: string | null;
 }
 
+function ResolvedMediaCard({
+  item,
+  onExpandImage
+}: {
+  item: MediaAttachment;
+  onExpandImage: (src: string, item: MediaAttachment) => void;
+}) {
+  const [resolvedSrc, setResolvedSrc] = useState<string>(item.url || '');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'expired'>(
+    item.localRef ? 'loading' : item.url ? 'ready' : 'expired'
+  );
+
+  useEffect(() => {
+    let active = true;
+    async function resolve() {
+      if (item.localRef) {
+        const localUrl = await getTempMediaObjectUrl(item.localRef);
+        if (!active) return;
+        if (localUrl) {
+          setResolvedSrc(localUrl);
+          setStatus('ready');
+          return;
+        }
+      }
+      if (item.url) {
+        if (!active) return;
+        setResolvedSrc(item.url);
+        setStatus('ready');
+      } else {
+        if (!active) return;
+        setResolvedSrc('');
+        setStatus('expired');
+      }
+    }
+    resolve();
+    return () => {
+      active = false;
+    };
+  }, [item.localRef, item.url]);
+
+  if (status === 'loading') {
+    return (
+      <div className="w-full max-w-md h-52 rounded-2xl bg-[#22211E] border border-[#35332E] flex items-center justify-center gap-2 text-xs text-[#9E9A92] animate-pulse">
+        {item.type === 'video' ? <Film size={16} /> : <ImageIcon size={16} />}
+        <span>Завантаження медіа...</span>
+      </div>
+    );
+  }
+
+  if (status === 'expired' || !resolvedSrc) {
+    return (
+      <div className="w-full max-w-md rounded-2xl bg-[#22201C] border border-[#3C3831] p-4 flex items-start gap-3 text-xs text-[#9E9A92]">
+        <AlertCircle size={17} className="text-[#CC785C] shrink-0 mt-0.5" />
+        <div className="space-y-1">
+          <div className="font-medium text-[#DED8CD]">
+            {item.type === 'video' ? 'Відео тимчасово недоступне' : 'Зображення недоступне'}
+          </div>
+          <p className="leading-relaxed text-[11.5px] text-[#8A867E]">
+            Термін тимчасового зберігання минув (3 дні) або зовнішнє посилання провайдера вже застаріло. Ви можете повторити генерацію.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.type === 'video') {
+    const filename = `scout-video-${item.id}.mp4`;
+    return (
+      <div className="w-full max-w-lg rounded-2xl bg-[#1F1E1B] border border-[#35332E] overflow-hidden shadow-lg">
+        <video
+          src={resolvedSrc}
+          controls
+          playsInline
+          preload="metadata"
+          onError={() => setStatus('expired')}
+          className="w-full max-h-[420px] bg-black block"
+        />
+        <div className="px-3.5 py-2.5 flex items-center justify-between gap-2 bg-[#23221E] border-t border-[#32302B]">
+          <div className="flex items-center gap-2 text-xs text-[#C8C3B8] min-w-0">
+            <Film size={14} className="text-[#CC785C] shrink-0" />
+            <span className="truncate font-medium">Згенероване відео (тимчасово)</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => downloadMediaAsset(resolvedSrc, filename)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#2E2C28] hover:bg-[#3A3732] text-[#ECE8E1] text-xs font-medium transition-colors shrink-0 active:scale-95"
+          >
+            <Download size={13} />
+            <span>Зберегти</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const filename = `scout-image-${item.id}.png`;
+  return (
+    <div className="w-full max-w-md rounded-2xl bg-[#1F1E1B] border border-[#35332E] overflow-hidden shadow-lg group/media">
+      <div className="relative bg-[#151412]">
+        <img
+          src={resolvedSrc}
+          alt={item.prompt || 'Згенероване зображення'}
+          onClick={() => onExpandImage(resolvedSrc, item)}
+          onError={() => setStatus('expired')}
+          className="w-full max-h-[440px] object-contain cursor-zoom-in block mx-auto"
+          loading="lazy"
+        />
+        <button
+          type="button"
+          onClick={() => onExpandImage(resolvedSrc, item)}
+          className="absolute top-2.5 right-2.5 p-2 rounded-full bg-black/60 hover:bg-black/80 text-white backdrop-blur-xs opacity-85 sm:opacity-0 group-hover/media:opacity-100 transition-opacity"
+          title="Відкрити на весь екран"
+        >
+          <Maximize2 size={14} />
+        </button>
+      </div>
+      <div className="px-3.5 py-2 flex items-center justify-between gap-2 bg-[#23221E] border-t border-[#32302B]">
+        <div className="flex items-center gap-2 text-xs text-[#C8C3B8] min-w-0">
+          <ImageIcon size={14} className="text-[#CC785C] shrink-0" />
+          <span className="truncate font-medium">Згенероване зображення</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => downloadMediaAsset(resolvedSrc, filename)}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#2E2C28] hover:bg-[#3A3732] text-[#ECE8E1] text-xs font-medium transition-colors shrink-0 active:scale-95"
+        >
+          <Download size={13} />
+          <span>Зберегти</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast, isTyping, onSkipTyping, toolStatus }: ChatMessageProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [lightboxMedia, setLightboxMedia] = useState<{ src: string; item: MediaAttachment } | null>(null);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.text);
+    const fallbackText = message.text || message.mediaItems?.[0]?.url || '';
+    navigator.clipboard.writeText(fallbackText);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleSpeak = () => {
-    if ('speechSynthesis' in window) {
+    if ('speechSynthesis' in window && message.text.trim()) {
       if (isPlayingAudio) {
         window.speechSynthesis.cancel();
         setIsPlayingAudio(false);
@@ -40,11 +182,12 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
   };
 
   const handleShare = async () => {
+    const shareText = message.text || message.mediaItems?.[0]?.url || '';
     if (navigator.share) {
       try {
         await navigator.share({
           title: 'Відповідь ШІ',
-          text: message.text,
+          text: shareText,
         });
       } catch {}
     } else {
@@ -106,16 +249,30 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
     );
   }
 
-  // Claude-style Assistant response: directly on canvas, with proper markdown typography
+  const hasMedia = Boolean(message.mediaItems && message.mediaItems.length > 0);
+  const renderToolIcon = (status: string) => {
+    if (status.toLowerCase().includes('відео')) {
+      return <Film size={15} className="text-amber-400 animate-pulse shrink-0" />;
+    }
+    if (status.toLowerCase().includes('зображен') || status.toLowerCase().includes('фото')) {
+      return <ImageIcon size={15} className="text-[#CC785C] animate-pulse shrink-0" />;
+    }
+    if (status.startsWith('Читаю сторінку')) {
+      return <FileText size={15} className="text-sky-400 animate-pulse shrink-0" />;
+    }
+    return <Globe size={15} className="text-[#CC785C] animate-spin shrink-0" />;
+  };
+
+  // Claude-style Assistant response: directly on canvas, with proper markdown typography & media cards
   return (
     <div
       className="flex flex-col w-full mb-8 animate-in fade-in duration-200"
       style={{ contain: 'layout style' }}
     >
       <div 
-        onClick={isTyping ? onSkipTyping : undefined}
-        className={`pr-2 pl-0.5 ${isTyping ? 'cursor-pointer' : ''}`}
-        title={isTyping ? "Натисніть щоб показати текст одразу" : undefined}
+        onClick={isTyping && !hasMedia ? onSkipTyping : undefined}
+        className={`pr-2 pl-0.5 ${isTyping && !hasMedia ? 'cursor-pointer' : ''}`}
+        title={isTyping && !hasMedia ? "Натисніть щоб показати текст одразу" : undefined}
       >
         {((message.searchQueries && message.searchQueries.length > 0) || (message.readUrls && message.readUrls.length > 0)) && (
           <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
@@ -148,15 +305,11 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
           </div>
         )}
 
-        {message.text === '' && isTyping ? (
+        {message.text === '' && !hasMedia && isTyping ? (
           <div className="flex items-center gap-2.5 py-1 text-[#9E9A92] text-sm select-none animate-pulse">
             {toolStatus ? (
               <>
-                {toolStatus.startsWith('Читаю сторінку') ? (
-                  <FileText size={15} className="text-sky-400 animate-pulse shrink-0" />
-                ) : (
-                  <Globe size={15} className="text-[#CC785C] animate-spin shrink-0" />
-                )}
+                {renderToolIcon(toolStatus)}
                 <span className="font-medium text-[#DED8CD] truncate">{toolStatus}</span>
               </>
             ) : (
@@ -167,19 +320,30 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
             )}
           </div>
         ) : (
-          <>
-            <MarkdownContent content={message.text} isTyping={isTyping} />
+          <div className="space-y-3">
+            {hasMedia && (
+              <div className="flex flex-col gap-3">
+                {message.mediaItems!.map((item) => (
+                  <ResolvedMediaCard
+                    key={item.id}
+                    item={item}
+                    onExpandImage={(src, media) => setLightboxMedia({ src, item: media })}
+                  />
+                ))}
+              </div>
+            )}
+
+            {message.text.trim().length > 0 && (
+              <MarkdownContent content={message.text} isTyping={isTyping} />
+            )}
+
             {isTyping && toolStatus && (
               <div className="mt-2.5 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#24231F] border border-[#3B3831] text-xs text-[#DED8CD] animate-pulse max-w-full">
-                {toolStatus.startsWith('Читаю сторінку') ? (
-                  <FileText size={13} className="text-sky-400 shrink-0" />
-                ) : (
-                  <Globe size={13} className="text-[#CC785C] animate-spin shrink-0" />
-                )}
+                {renderToolIcon(toolStatus)}
                 <span className="truncate">{toolStatus}</span>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
 
@@ -204,13 +368,15 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
               <Share2 size={17} />
             </button>
 
-            <button
-              onClick={handleSpeak}
-              className={`p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors ${isPlayingAudio ? 'text-[#CC785C]' : ''}`}
-              title="Озвучити"
-            >
-              <Volume2 size={17} />
-            </button>
+            {message.text.trim().length > 0 && (
+              <button
+                onClick={handleSpeak}
+                className={`p-1.5 rounded-lg hover:text-[#ECE8E1] hover:bg-[#252421] transition-colors ${isPlayingAudio ? 'text-[#CC785C]' : ''}`}
+                title="Озвучити"
+              >
+                <Volume2 size={17} />
+              </button>
+            )}
 
             <button
               onClick={() => setFeedback(feedback === 'up' ? null : 'up')}
@@ -246,6 +412,47 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
           )}
         </>
       )}
+
+      {/* Fullscreen Image Lightbox Modal */}
+      {lightboxMedia && (
+        <div
+          className="fixed inset-0 z-[90] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setLightboxMedia(null)}
+        >
+          <div
+            className="w-full max-w-4xl flex items-center justify-between mb-3 px-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="text-xs text-[#C8C3B8] truncate pr-4">
+              {lightboxMedia.item.prompt || 'Згенероване зображення'}
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => downloadMediaAsset(lightboxMedia.src, `scout-image-${lightboxMedia.item.id}.png`)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#CC785C] hover:bg-[#D97757] text-white text-xs font-semibold transition-colors"
+              >
+                <Download size={14} />
+                <span>Завантажити</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightboxMedia(null)}
+                className="p-2 rounded-full bg-[#2A2825] hover:bg-[#3A3732] text-[#EDE9DF] transition-colors"
+                aria-label="Закрити перегляд"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+          <img
+            src={lightboxMedia.src}
+            alt={lightboxMedia.item.prompt || 'Згенероване зображення'}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[82vh] max-w-full object-contain rounded-2xl shadow-2xl"
+          />
+        </div>
+      )}
     </div>
   );
 }, (prev, next) => (
@@ -254,6 +461,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRetry, isLast,
   prev.message.text === next.message.text &&
   prev.message.searchQueries === next.message.searchQueries &&
   prev.message.readUrls === next.message.readUrls &&
+  prev.message.mediaItems === next.message.mediaItems &&
   prev.isLast === next.isLast &&
   prev.isTyping === next.isTyping &&
   prev.toolStatus === next.toolStatus &&
